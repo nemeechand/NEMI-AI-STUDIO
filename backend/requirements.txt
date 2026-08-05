@@ -1,3 +1,8 @@
 # Runtime dependencies for the NEMI AI STUDIO backend.
-# Intentionally empty: the backend foundation uses only the Python
-# standard library until API/business-logic architecture is approved.
+#
+# Locked in Sprint 4 (see docs/ARCHITECTURE.md): FastAPI + Uvicorn serve
+# the local HTTP API that Electron's main process talks to. The renderer
+# never calls this API directly — Electron main relays every call
+# through window.nemi (see frontend/electron/backend-process.ts).
+fastapi>=0.115
+uvicorn>=0.32

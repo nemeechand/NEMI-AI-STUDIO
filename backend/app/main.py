@@ -1,21 +1,16 @@
 from __future__ import annotations
 
-import logging
-import sys
-
-
-def configure_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        stream=sys.stdout,
-    )
+from app.server import run_server
 
 
 def main() -> int:
-    configure_logging()
-    logger = logging.getLogger("nemi.backend")
-    logger.info("NEMI AI STUDIO Backend — Foundation Bootstrap")
+    """Process entry point. Blocks, running the backend HTTP server until
+    the process receives an interrupt/termination signal (e.g. from
+    Electron's main process stopping the child on app quit)."""
+    try:
+        run_server()
+    except KeyboardInterrupt:
+        pass
     return 0
 
 

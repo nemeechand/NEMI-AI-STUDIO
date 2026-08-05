@@ -1,0 +1,101 @@
+from __future__ import annotations
+
+import sqlite3
+
+# Mirrors docs/DATABASE_SCHEMA.md exactly. Update both together.
+SCHEMA_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        path TEXT NOT NULL UNIQUE,
+        description TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        title TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL
+            CHECK (status IN ('pending', 'in_progress', 'review', 'done', 'blocked')),
+        priority TEXT NOT NULL CHECK (priority IN ('critical', 'high', 'medium', 'low')),
+        agent TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id)",
+    """
+    CREATE TABLE IF NOT EXISTS files (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        relative_path TEXT NOT NULL,
+        language TEXT,
+        last_indexed TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (project_id, relative_path)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_files_project_id ON files(project_id)",
+    """
+    CREATE TABLE IF NOT EXISTS agents (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        role_file TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS memory (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id),
+        type TEXT NOT NULL
+            CHECK (type IN ('project', 'conversation', 'long_term', 'task', 'knowledge')),
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_memory_project_type ON memory(project_id, type)",
+    """
+    CREATE TABLE IF NOT EXISTS logs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id),
+        level TEXT NOT NULL CHECK (level IN ('INFO', 'WARNING', 'ERROR', 'DEBUG')),
+        source TEXT NOT NULL,
+        message TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_logs_created_at ON logs(created_at)",
+    """
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS history (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id),
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        action TEXT NOT NULL CHECK (action IN ('created', 'updated', 'deleted')),
+        snapshot TEXT,
+        created_at TEXT NOT NULL
+    )
+    """,
+)
+
+
+def init_db(connection: sqlite3.Connection) -> None:
+    for statement in SCHEMA_STATEMENTS:
+        connection.execute(statement)
+    connection.commit()

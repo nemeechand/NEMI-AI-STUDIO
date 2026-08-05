@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getBackendHealth, startBackend, stopBackend } from './backend-process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -75,7 +76,12 @@ ipcMain.handle('window:close', () => {
 
 ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() ?? false);
 
-app.whenReady().then(createMainWindow);
+ipcMain.handle('backend:health', () => getBackendHealth());
+
+app.whenReady().then(() => {
+  createMainWindow();
+  startBackend(__dirname);
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -87,4 +93,8 @@ app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createMainWindow();
   }
+});
+
+app.on('before-quit', () => {
+  stopBackend();
 });

@@ -1,4 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { BackendHealth } from './backend-process';
+
+const backend = {
+  health: (): Promise<BackendHealth> => ipcRenderer.invoke('backend:health'),
+};
 
 const windowControls = {
   minimize: () => ipcRenderer.invoke('window:minimize'),
@@ -13,4 +18,4 @@ const windowControls = {
   },
 };
 
-contextBridge.exposeInMainWorld('nemi', { windowControls });
+contextBridge.exposeInMainWorld('nemi', { windowControls, backend });

@@ -150,7 +150,7 @@ Finalize software architecture, database design, and AI agent workflow documenta
 
 Delivered:
 
-docs/ARCHITECTURE.md — locks the layer mapping, Electron process/IPC boundary (`window.electronAPI` only), the Context+Provider+Hook state pattern, and defers backend framework/Electron↔Python transport as open decisions
+docs/ARCHITECTURE.md — locks the layer mapping, Electron process/IPC boundary (`window.nemi` only), the Context+Provider+Hook state pattern, and defers backend framework/Electron↔Python transport as open decisions
 
 docs/DATABASE_SCHEMA.md — finalized SQLite table design (projects, tasks, files, agents, memory, logs, settings, history) with columns, keys, indexes and relationships — design only, no implementation yet
 
@@ -164,7 +164,43 @@ Status Bar label updated to "Sprint 3 — Dashboard"
 
 Verified: tsc build, eslint (0 warnings), prettier (clean on all touched files), vite build (renderer + main + preload), pytest (1 passed), ruff check (all checks passed), mypy (no issues), and a live `npm run dev` Electron launch (process stable, no runtime errors)
 
-Sprint 4 — Pending Approval
+Sprint 4 — Completed (Backend Integration)
+
+Goal:
+
+Finalize backend architecture, integrate Electron with the Python backend, build a robust IPC layer, build the SQLite data access layer, implement startup + health checks, add centralized logging and error handling.
+
+Delivered:
+
+Backend framework locked: FastAPI + Uvicorn over HTTP on 127.0.0.1:8756 (fixed, env-overridable port) — the backend's first-ever runtime dependency (Sprint 1B was intentionally dependency-free)
+
+backend/app/core/: config.py (Settings, env-overridable, repo-root-relative paths independent of cwd), logging.py (console + rotating file at logs/backend.log), errors.py (NemiError + global FastAPI exception handlers returning a consistent {"error": {"code","message"}} shape, unhandled exceptions logged server-side with full traceback, never leaked to the client)
+
+backend/app/db/: connection.py (context-managed sqlite3 connection, foreign_keys pragma, Row access), schema.py (all 8 DATABASE_SCHEMA.md tables + indexes, idempotent init_db()), repositories/logs_repository.py (insert/list_recent — the first concrete repository, backing the logs table)
+
+backend/app/api/health.py + backend/app/server.py: GET /health (status, version, env, uptime), FastAPI lifespan hook that configures logging, initializes the database, and logs a startup entry to both the file log and the logs table
+
+backend/app/main.py rewritten as the real process entry point (blocking run_server(), returns 0 on clean shutdown/KeyboardInterrupt)
+
+frontend/electron/backend-process.ts: Electron main spawns `python -m app.main` as a child process on app ready (parallel with window creation, not blocking it), polls /health (300ms interval, 15s timeout) to determine starting/ready/error state, and stops the child cleanly on app before-quit — manually verified: graceful window close terminates the Python child with no orphaned process
+
+IPC: window.nemi.backend.health() (preload.ts + electron-api.d.ts) — the renderer never talks to the backend directly; every call is relayed through Electron main, keeping the Sprint 2 CSP/sandbox hardening intact
+
+StatusBar now shows real backend health (starting/ready/error/stopped) instead of a static "Ready" label, polling every 5s
+
+.gitignore updated: database/*.db and database/*.db-journal ignored (runtime artifacts, regenerated on startup; *.log was already ignored)
+
+docs/ARCHITECTURE.md updated: closes the Sprint 3 "open decisions" (backend framework, transport, process lifecycle) with the choices above and the reasoning behind them
+
+docs/DATABASE_SCHEMA.md updated: implementation status section added — schema is live, only logs has a repository, remaining 7 tables intentionally deferred to the sprints that need them
+
+docs/SPRINT_4_REPORT.md created
+
+Verified: tsc build, eslint (0 warnings), prettier (clean), vite build (renderer + main + preload); pytest (10 passed), ruff check (all checks passed), mypy strict (0 issues, 20 source files); live end-to-end test — `npm run dev` spawned Electron, which spawned the Python backend, which answered curl http://127.0.0.1:8756/health with a real response, and a graceful window close cleanly terminated both processes with nothing orphaned
+
+Known limitation: spawning `python` from PATH assumes the machine running the app has a compatible Python with backend dependencies installed — acceptable for development, but a packaged/distributed build will need to bundle a Python runtime (future work, not solved this sprint)
+
+Sprint 5 — Pending Approval
 
 ---
 
@@ -248,6 +284,22 @@ Sprint 1 Completed
 
 ✔ Sprint 3 Verified (tsc, eslint, prettier, vite build, pytest, ruff, mypy, live Electron dev launch all passing)
 
+✔ Sprint 4 Completed — Backend Architecture Finalized; Electron ↔ Python Integration Live
+
+✔ FastAPI + Uvicorn Backend Service (backend/app/server.py, backend/app/api/health.py)
+
+✔ Backend Core Modules (config.py, logging.py, errors.py) — env-configurable settings, centralized console+file logging, consistent JSON error responses
+
+✔ SQLite Data Access Layer (backend/app/db/) — all 8 tables created automatically on startup, LogsRepository implemented
+
+✔ Electron ↔ Python Process Integration (frontend/electron/backend-process.ts) — spawn, health-poll, graceful shutdown, verified no orphaned processes
+
+✔ IPC Backend Bridge (window.nemi.backend.health()) — renderer never talks to the backend directly
+
+✔ StatusBar Wired to Real Backend Health (replacing the static "Ready" label)
+
+✔ Sprint 4 Verified (tsc, eslint, prettier, vite build, pytest ×10, ruff, mypy strict, live end-to-end Electron+backend launch with graceful shutdown all passing)
+
 ---
 
 # PENDING TASKS
@@ -266,13 +318,13 @@ Testing Engine
 
 Build System
 
-Backend API Framework Selection
+Python runtime bundling for packaged/distributed builds (currently assumes `python` on PATH — dev-mode only)
 
-Electron ↔ Python Process Integration
+Repositories/business logic for the remaining 7 tables (projects, tasks, files, agents, memory, settings, history) — schema exists, repositories deferred to the sprints that need them
 
 Real Project Explorer (filesystem-backed, replacing static placeholder tree)
 
-Real Logger Panel (wired to actual log events, replacing static placeholder entries)
+Real Logger Panel (wired to the backend's logs table, replacing static placeholder entries — backend now has real logs to show)
 
 Resizable/drag panel splitters (sidebar and logger panel are currently show/hide toggles only)
 
@@ -422,19 +474,19 @@ Sprint 2 Completed — Desktop Application Shell (Tailwind v4, Theme Manager, VS
 
 Sprint 3 Completed — Architecture (docs/ARCHITECTURE.md), Database Design (docs/DATABASE_SCHEMA.md), AI Agent Workflow (docs/AGENTS_OVERVIEW.md) finalized; Dashboard module implemented with real content
 
+Sprint 4 Completed — Backend finalized as FastAPI + Uvicorn; Electron ↔ Python process integration live (spawn, health-poll, graceful shutdown); SQLite DAL implemented (schema + LogsRepository); centralized logging and consistent error handling added; StatusBar wired to real backend health
+
 ---
 
 # NEXT MILESTONE
 
-Sprint 4
+Sprint 5
 
-Select Backend API Framework (per open decision in docs/ARCHITECTURE.md)
+Real Project Explorer (filesystem-backed, replacing static placeholder tree) — natural next step now that a backend exists to read the filesystem through
 
-Wire Electron ↔ Python Process Integration
+Real Logger Panel (wired to the backend's logs table via a new IPC endpoint, replacing static mock entries)
 
-Begin real Project Explorer (filesystem-backed, replacing static placeholder tree)
-
-Begin real Logger Panel (wired to actual log events)
+Projects repository + "New Project" / "Open Project" Dashboard actions (currently honest disabled stubs)
 
 ---
 

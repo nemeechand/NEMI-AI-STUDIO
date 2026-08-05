@@ -1,8 +1,8 @@
 # ARCHITECTURE.md
 
-Version: 1.0
-Status: Finalized (Sprint 3)
-Governs: Sprint 4 onward
+Version: 1.1
+Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4)
+Governs: Sprint 5 onward
 
 ---
 
@@ -38,7 +38,7 @@ Location: `frontend/src`
 
 Rule: components read data through props or hooks only. No component
 may import Node/Python/filesystem APIs directly — that always goes
-through `window.electronAPI` (see IPC Boundary below).
+through `window.nemi` (see IPC Boundary below).
 
 ## Application Layer
 
@@ -62,22 +62,31 @@ Gemini, DeepSeek, Qwen, Ollama per TECH_STACK.md), the memory system
 (see MASTER_SPECIFICATION.md → MEMORY SYSTEM), and the agent
 implementations that operationalize `agents/*.md`.
 
-Decision deferred to a future sprint: whether AI provider calls are
-made from the Python backend (preferred, keeps secrets out of the
-renderer) or proxied through Electron main. Given the Security Rules
-("never expose secrets", "no secrets inside source code"), the
-Python backend is the default assumption — API keys must never reach
-the renderer process.
+Locked in Sprint 4: AI provider calls will be made from the Python
+backend, never proxied through or exposed to the renderer. This
+follows directly from the Security Rules ("never expose secrets", "no
+secrets inside source code") and from the transport decision below —
+the backend is already the sole owner of anything that talks to the
+outside world.
 
 ## Data Layer
 
-- `backend/app` — Python backend package (scaffold only, Sprint 1B).
-- SQLite — see `docs/DATABASE_SCHEMA.md` for finalized table design.
-  No database file or ORM exists yet; this is a design-only sprint
-  for the schema.
-- `logs/`, `memory/`, `config/`, `projects/` — top-level folders
-  reserved per MASTER_SPECIFICATION's FOLDER STRUCTURE. Currently
-  empty; not yet wired to any process.
+- `backend/app` — Python backend package. As of Sprint 4 this is a
+  running FastAPI service, not just a scaffold (see BACKEND SERVICE
+  below).
+- SQLite — see `docs/DATABASE_SCHEMA.md` for the finalized table
+  design. As of Sprint 4 the schema is created automatically at
+  backend startup (`app/db/schema.py::init_db`) into
+  `database/nemi.db`. Only the `logs` table has a repository
+  (`app/db/repositories/logs_repository.py`) so far — the other seven
+  tables are schema-ready but have no repository/business logic yet,
+  intentionally deferred to the sprints that need them.
+- `logs/` — now actively used: the backend's rotating file log lives
+  at `logs/backend.log` (see LOGGING below). `memory/`, `config/`,
+  `projects/` remain reserved per MASTER_SPECIFICATION's FOLDER
+  STRUCTURE, not yet wired to any process.
+- `database/*.db` and `logs/*.log` are gitignored — both are runtime
+  artifacts regenerated on backend startup, never committed.
 
 ---
 
@@ -90,7 +99,7 @@ Three processes, already implemented and hardened in Sprint 2:
   Python backend as a child process. `sandbox: true`,
   `contextIsolation: true`, `nodeIntegration: false`.
 - **Preload script** (`frontend/electron/preload.ts`) — the only
-  bridge between main and renderer. Exposes a typed `window.electronAPI`
+  bridge between main and renderer. Exposes a typed `window.nemi`
   surface via `contextBridge`. Nothing beyond what the renderer
   actually needs may be exposed here.
 - **Renderer process** (`frontend/src`) — the React app. Never talks
@@ -98,12 +107,21 @@ Three processes, already implemented and hardened in Sprint 2:
 
 ## IPC Boundary (locked decision)
 
-All renderer → native calls go through `window.electronAPI`
-(declared in `frontend/src/types/electron-api.d.ts`). Today this
-surface is empty (no bridged methods yet). Future filesystem,
+All renderer → native calls go through `window.nemi`
+(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 4
+this surface has two namespaces: `windowControls` (Sprint 2) and
+`backend` (Sprint 4, currently just `health()`). Future filesystem,
 database, or AI-agent triggers must be added here first, as a typed
 method, before any component may call them. A component must never
 assume Node.js globals exist.
+
+The renderer never talks to the backend HTTP API directly — it has no
+network access to it, and the CSP's `connect-src 'self'` intentionally
+does not allow it. Every backend call is relayed through Electron
+main via `ipcMain.handle(...)` / `ipcRenderer.invoke(...)`, which then
+performs the HTTP request to `127.0.0.1` from the Node context. This
+keeps the renderer's attack surface unchanged from Sprint 2's
+hardening baseline even though a live local service now exists.
 
 ---
 
@@ -126,18 +144,50 @@ unrelated components.
 
 ---
 
-# BACKEND INTEGRATION (open decision — not started)
+# BACKEND SERVICE (locked decision — Sprint 4)
 
-Deferred to a future sprint, tracked in PROJECT_MEMORY.md pending
-tasks:
+**Framework**: FastAPI + Uvicorn. Chosen over a minimal stdlib
+approach because it gives structured request/response handling,
+built-in validation, a natural home for a `/health` endpoint, and a
+straightforward path to streaming (SSE) responses once AI provider
+calls are added — all without hand-rolling an HTTP layer. This is the
+first runtime dependency the backend has ever had (Sprint 1B was
+intentionally dependency-free); `fastapi`/`uvicorn` are now in
+`backend/requirements.txt`.
 
-- API framework selection (e.g. FastAPI vs. a minimal stdlib
-  approach) for `backend/app`.
-- Electron ↔ Python process wiring (child process + local HTTP, or
-  stdio-based RPC).
+**Transport**: plain HTTP over `127.0.0.1`, fixed port `8756`
+(overridable via `NEMI_BACKEND_HOST` / `NEMI_BACKEND_PORT`). A fixed
+port was chosen over OS-assigned ephemeral-port negotiation for
+simplicity and debuggability (`curl http://127.0.0.1:8756/health`
+always works in dev) — this project runs one backend instance per
+running app instance, so port collision risk is low. Ephemeral-port
+negotiation (child prints its bound port on stdout, main parses it)
+is a documented future option if multi-instance support is ever
+needed.
 
-Until this decision is made, no frontend code may assume a running
-backend, and no backend code may assume it is reachable from Electron.
+**Process lifecycle**: Electron main owns the backend's entire
+lifecycle (`frontend/electron/backend-process.ts`):
+
+- Spawned via `python -m app.main` with `cwd` set to `backend/`,
+  started right after `app.whenReady()` — in parallel with window
+  creation, not blocking it.
+- Readiness is polled via `GET /health` (300ms interval, 15s
+  timeout) from Electron main; state is one of `starting` / `ready`
+  / `error` / `stopped`, exposed to the renderer via
+  `window.nemi.backend.health()`.
+- Stopped via `child.kill()` on `app.on('before-quit')`. Verified
+  manually in Sprint 4 that a graceful window close terminates the
+  Python child — no orphaned process.
+- stdout/stderr are piped to Electron's console today (prefixed
+  `[backend]`). Relaying them into the in-app Logger Panel is future
+  work — the Logger Panel is still mock data (Sprint 2 pending item).
+
+**Known limitation**: spawning `python` from `PATH` assumes a
+compatible Python + the backend's dependencies are installed on the
+machine running the app. This is acceptable for development; a
+packaged/distributed build will need to bundle a Python runtime
+(e.g. PyInstaller) — tracked as a pending task, not solved this
+sprint (packaging is explicitly a later MASTER_SPECIFICATION phase).
 
 ---
 
@@ -151,17 +201,33 @@ must never run with Node.js integration in the renderer.
 
 ---
 
-# SUMMARY OF LOCKED DECISIONS THIS SPRINT
+# SUMMARY OF LOCKED DECISIONS
 
-1. Application/AI layers are reserved namespaces, not yet implemented.
+1. The Application layer (controllers/services/workflow orchestration)
+   is a reserved namespace, not yet implemented.
 2. All native access from the renderer goes through
-   `window.electronAPI` — no exceptions.
+   `window.nemi` — no exceptions. The renderer has no direct network
+   access to the backend; Electron main relays every call.
 3. AI provider secrets belong in the Python backend, never the
-   renderer, once that layer exists.
+   renderer, once the AI layer exists (Sprint 4: locked, not yet built).
 4. Cross-cutting frontend state follows the Context+Provider+Hook
    three-file pattern established by the Theme Manager.
-5. Backend framework and Electron↔Python transport remain open,
-   explicitly deferred, decisions.
+5. **(Sprint 4)** Backend framework is FastAPI + Uvicorn, transport is
+   HTTP over `127.0.0.1:8756` (fixed port), Electron main owns the
+   Python child process's full lifecycle (spawn, health-poll, kill).
+6. **(Sprint 4)** SQLite schema is created automatically at backend
+   startup into `database/nemi.db`; only the `logs` table has a
+   repository so far — remaining tables are schema-ready, awaiting
+   the business logic that needs them.
+7. **(Sprint 4)** Centralized logging is console + rotating file
+   (`logs/backend.log`) via the stdlib `logging` module, separate
+   from the structured `logs` SQLite table (which holds discrete
+   lifecycle/audit entries for the future Logger Panel, not a mirror
+   of every log line).
+8. **(Sprint 4)** Backend errors return a consistent
+   `{"error": {"code", "message"}}` JSON shape via global FastAPI
+   exception handlers; unhandled exceptions are logged with full
+   traceback server-side and never leak internals to the client.
 
 ---
 

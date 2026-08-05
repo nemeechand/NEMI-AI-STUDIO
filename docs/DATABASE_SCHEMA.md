@@ -1,7 +1,7 @@
 # DATABASE_SCHEMA.md
 
-Version: 1.0
-Status: Finalized Design (Sprint 3) — Implementation Not Started
+Version: 1.1
+Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4)
 Engine: SQLite
 
 ---
@@ -161,15 +161,33 @@ agents   (standalone, referenced by tasks.agent as a name, not a FK —
 
 ---
 
-# WHAT THIS SPRINT DOES NOT DO
+# IMPLEMENTATION STATUS (Sprint 4)
 
-- No SQLite file is created.
-- No Python models/ORM are written.
-- No migration tooling is chosen.
-
-These require the backend API framework decision in
-`docs/ARCHITECTURE.md` first, so implementation is not started this
-sprint to avoid building on an unconfirmed foundation.
+- Schema implemented exactly as designed above:
+  `backend/app/db/schema.py::SCHEMA_STATEMENTS` /  `init_db()`.
+- `init_db()` runs automatically on backend startup
+  (`backend/app/server.py`), creating `database/nemi.db` if it
+  doesn't exist. The statements are idempotent (`CREATE TABLE IF NOT
+  EXISTS`), so repeated startups are safe.
+- Connection management: `backend/app/db/connection.py::get_connection`
+  — a context manager enabling `PRAGMA foreign_keys = ON` and
+  `sqlite3.Row` access, one connection per use rather than a shared
+  pool (appropriate for a single-user desktop app).
+- Repository pattern: only `LogsRepository`
+  (`backend/app/db/repositories/logs_repository.py`) exists so far —
+  `insert()` / `list_recent()`. The remaining seven tables
+  (`projects`, `tasks`, `files`, `agents`, `memory`, `settings`,
+  `history`) are schema-ready but intentionally have no repository or
+  business logic yet; those arrive with the sprints that actually
+  need them (Project Explorer, Task/Agent orchestration, Memory
+  Engine), per the Planner principle "database before business logic"
+  — the schema had to exist first, but a table being queryable
+  doesn't mean its feature is built.
+- No ORM was introduced — plain `sqlite3` + hand-written SQL, kept
+  deliberately simple for a schema this size.
+- No migration tooling was chosen; `CREATE TABLE IF NOT EXISTS` is
+  sufficient while the schema is additive-only. Revisit if a column
+  needs to change on an existing table.
 
 ---
 

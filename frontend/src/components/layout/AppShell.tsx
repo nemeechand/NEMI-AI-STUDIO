@@ -5,6 +5,7 @@ import { StatusBar } from './StatusBar';
 import { ProjectExplorer } from '../explorer/ProjectExplorer';
 import { LoggerPanel } from '../logger/LoggerPanel';
 import { SettingsModal } from '../settings/SettingsModal';
+import { Dashboard } from '../dashboard/Dashboard';
 
 export function AppShell() {
   const [sidebarVisible, setSidebarVisible] = useState(true);
@@ -23,8 +24,8 @@ export function AppShell() {
         <Sidebar onOpenSettings={() => setSettingsOpen(true)} />
         {sidebarVisible && <ProjectExplorer />}
         <div className="flex min-w-0 flex-1 flex-col">
-          <main className="flex flex-1 items-center justify-center overflow-auto text-fg-muted">
-            <p className="text-sm">No project opened yet.</p>
+          <main className="flex min-h-0 flex-1 overflow-auto">
+            <Dashboard onOpenSettings={() => setSettingsOpen(true)} />
           </main>
           {loggerVisible && <LoggerPanel onClose={() => setLoggerVisible(false)} />}
         </div>

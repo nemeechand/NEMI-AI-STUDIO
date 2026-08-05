@@ -142,7 +142,29 @@ Electron hardening: `sandbox: true`, `contextIsolation: true`, `nodeIntegration:
 
 Verified: tsc build, eslint (0 warnings), prettier, vite build (renderer + main + preload), and a live `npm run dev` Electron launch (process stable, no runtime errors)
 
-Sprint 3 — Pending Approval
+Sprint 3 — Completed (Architecture/Database/Agent Finalization + Dashboard)
+
+Goal:
+
+Finalize software architecture, database design, and AI agent workflow documentation. Start real Dashboard content behind the Sprint 2 shell.
+
+Delivered:
+
+docs/ARCHITECTURE.md — locks the layer mapping, Electron process/IPC boundary (`window.electronAPI` only), the Context+Provider+Hook state pattern, and defers backend framework/Electron↔Python transport as open decisions
+
+docs/DATABASE_SCHEMA.md — finalized SQLite table design (projects, tasks, files, agents, memory, logs, settings, history) with columns, keys, indexes and relationships — design only, no implementation yet
+
+docs/AGENTS_OVERVIEW.md — consolidates the 8 agent roles from agents/*.md into one pipeline diagram and approval-gate reference
+
+docs/PRODUCT_VISION.md reviewed for consistency against all other docs — confirmed complete, no changes required
+
+Dashboard module (frontend/src/components/dashboard/): Dashboard, DashboardCard, WelcomeHeader, QuickActionsCard, SprintStatusCard, AITeamCard, TechStackCard, dashboardData.ts — replaces the "No project opened yet" placeholder with real content (sprint progress, AI team roster, tech stack, quick actions). New Project/Open Project are honest disabled stubs ("Coming Soon") since filesystem project loading isn't implemented yet
+
+Status Bar label updated to "Sprint 3 — Dashboard"
+
+Verified: tsc build, eslint (0 warnings), prettier (clean on all touched files), vite build (renderer + main + preload), pytest (1 passed), ruff check (all checks passed), mypy (no issues), and a live `npm run dev` Electron launch (process stable, no runtime errors)
+
+Sprint 4 — Pending Approval
 
 ---
 
@@ -212,21 +234,27 @@ Sprint 1 Completed
 
 ✔ Shell Verified (tsc, eslint, prettier, vite build, live Electron dev launch all passing)
 
+✔ Sprint 3 Completed — Architecture, Database, and Agent Workflow Finalized; Dashboard Started
+
+✔ docs/ARCHITECTURE.md Created (layer mapping, IPC boundary, state pattern locked)
+
+✔ docs/DATABASE_SCHEMA.md Created (8 tables designed: projects, tasks, files, agents, memory, logs, settings, history)
+
+✔ docs/AGENTS_OVERVIEW.md Created (8-agent pipeline + approval gates consolidated)
+
+✔ docs/PRODUCT_VISION.md Reviewed — confirmed consistent and complete
+
+✔ Dashboard Module Implemented (Sprint Progress, AI Team, Tech Stack, Quick Actions cards) — real content replacing the Sprint 2 placeholder
+
+✔ Sprint 3 Verified (tsc, eslint, prettier, vite build, pytest, ruff, mypy, live Electron dev launch all passing)
+
 ---
 
 # PENDING TASKS
 
-Product Vision
-
-Architecture Design
-
-Database Design
-
-Agent Design
-
 Workflow Design
 
-Dashboard Design (real content — Sprint 2 delivered the shell/layout only)
+Dashboard: real filesystem-backed New Project / Open Project actions (currently honest disabled stubs)
 
 Memory Engine
 
@@ -392,21 +420,21 @@ Sprint 1B Completed — Python Backend Foundation Bootstrap (backend/app, backen
 
 Sprint 2 Completed — Desktop Application Shell (Tailwind v4, Theme Manager, VS Code style layout, hardened Electron main/preload)
 
+Sprint 3 Completed — Architecture (docs/ARCHITECTURE.md), Database Design (docs/DATABASE_SCHEMA.md), AI Agent Workflow (docs/AGENTS_OVERVIEW.md) finalized; Dashboard module implemented with real content
+
 ---
 
 # NEXT MILESTONE
 
-Sprint 3
+Sprint 4
 
-Finalize Product Vision
+Select Backend API Framework (per open decision in docs/ARCHITECTURE.md)
 
-Finalize Software Architecture
+Wire Electron ↔ Python Process Integration
 
-Finalize Database
+Begin real Project Explorer (filesystem-backed, replacing static placeholder tree)
 
-Finalize AI Agents
-
-Start Dashboard Development (real content behind the Sprint 2 shell)
+Begin real Logger Panel (wired to actual log events)
 
 ---
 

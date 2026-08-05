@@ -1,5 +1,12 @@
+import { ThemeProvider } from './theme/ThemeProvider';
+import { AppShell } from './components/layout/AppShell';
+
 function App() {
-  return <div>NEMI AI STUDIO — Sprint 1 Bootstrap</div>;
+  return (
+    <ThemeProvider>
+      <AppShell />
+    </ThemeProvider>
+  );
 }
 
 export default App;

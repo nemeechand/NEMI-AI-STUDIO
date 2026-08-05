@@ -86,7 +86,63 @@ Base frontend folder structure
 
 No UI implemented. No Python. No SQLite. No AI. No business logic.
 
-Sprint 2 — Pending Approval
+Sprint 1B — Completed
+
+Goal:
+
+Extend the software foundation with a Python backend.
+
+No business logic.
+
+No API framework selected yet.
+
+No Electron ↔ Python process wiring yet.
+
+Delivered:
+
+Python backend package (backend/app) with a runnable entry point
+
+Pytest test scaffold (backend/tests)
+
+Ruff (lint) and Mypy (strict type-check) tool configuration
+
+Dependency files (requirements.txt, requirements-dev.txt) — zero runtime dependencies by design
+
+.env.example placeholder (no secrets)
+
+Verified: pytest, ruff check, mypy, and `python -m app.main` all pass
+
+Sprint 2 — Completed (Desktop Shell)
+
+Goal:
+
+Build the desktop application shell only.
+
+No AI. No Database. No business logic.
+
+Delivered:
+
+VS Code style layout (custom frameless title bar, activity-bar sidebar, main content area, bottom logger panel, status bar)
+
+Professional Dark Theme (default) with a Light theme alternative, via a CSS-variable Theme Manager
+
+Header Toolbar with custom window controls (minimize / maximize / close) over a frameless BrowserWindow
+
+Project Explorer (static placeholder tree, recursive component, no real filesystem access yet)
+
+Logger Panel (static placeholder entries, no real log ingestion yet)
+
+Settings Window (in-app modal with Appearance/theme control — not a separate OS window; documented as a deliberate simplification)
+
+Theme Manager (React context + provider + hook, persisted to localStorage, `dark` class strategy)
+
+TailwindCSS v4 integrated via `@tailwindcss/vite` (no separate config file — CSS-first `@theme` tokens)
+
+Electron hardening: `sandbox: true`, `contextIsolation: true`, `nodeIntegration: false`, denied `window.open`, blocked cross-origin `will-navigate`, restrictive Content-Security-Policy meta tag
+
+Verified: tsc build, eslint (0 warnings), prettier, vite build (renderer + main + preload), and a live `npm run dev` Electron launch (process stable, no runtime errors)
+
+Sprint 3 — Pending Approval
 
 ---
 
@@ -138,6 +194,24 @@ Sprint 1 Completed
 
 ✔ Build Verified (npm install, tsc build, eslint, vite build all passing)
 
+✔ Sprint 1B Completed — Python Backend Foundation Bootstrap
+
+✔ Ruff + Mypy Configured (backend/pyproject.toml)
+
+✔ Base Backend Folder Structure Created (backend/app, backend/tests)
+
+✔ Backend Verified (pytest, ruff check, mypy, python -m app.main all passing)
+
+✔ Sprint 2 Completed — Desktop Application Shell (VS Code style layout)
+
+✔ TailwindCSS v4 Integrated (@tailwindcss/vite)
+
+✔ Theme Manager Implemented (Dark default, Light alternative, persisted)
+
+✔ Electron Hardened (sandbox, CSP, navigation/window-open guards, custom frameless title bar)
+
+✔ Shell Verified (tsc, eslint, prettier, vite build, live Electron dev launch all passing)
+
 ---
 
 # PENDING TASKS
@@ -152,7 +226,7 @@ Agent Design
 
 Workflow Design
 
-Dashboard Design
+Dashboard Design (real content — Sprint 2 delivered the shell/layout only)
 
 Memory Engine
 
@@ -163,6 +237,16 @@ Git Integration
 Testing Engine
 
 Build System
+
+Backend API Framework Selection
+
+Electron ↔ Python Process Integration
+
+Real Project Explorer (filesystem-backed, replacing static placeholder tree)
+
+Real Logger Panel (wired to actual log events, replacing static placeholder entries)
+
+Resizable/drag panel splitters (sidebar and logger panel are currently show/hide toggles only)
 
 ---
 
@@ -304,11 +388,15 @@ Authentication Completed
 
 Sprint 1 Completed — Electron + React + TypeScript + Vite Bootstrap
 
+Sprint 1B Completed — Python Backend Foundation Bootstrap (backend/app, backend/tests, Ruff, Mypy)
+
+Sprint 2 Completed — Desktop Application Shell (Tailwind v4, Theme Manager, VS Code style layout, hardened Electron main/preload)
+
 ---
 
 # NEXT MILESTONE
 
-Sprint 2
+Sprint 3
 
 Finalize Product Vision
 
@@ -318,7 +406,7 @@ Finalize Database
 
 Finalize AI Agents
 
-Start Dashboard Development
+Start Dashboard Development (real content behind the Sprint 2 shell)
 
 ---
 

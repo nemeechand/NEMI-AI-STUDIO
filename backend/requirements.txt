@@ -1,0 +1,3 @@
+# Runtime dependencies for the NEMI AI STUDIO backend.
+# Intentionally empty: the backend foundation uses only the Python
+# standard library until API/business-logic architecture is approved.

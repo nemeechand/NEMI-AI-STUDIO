@@ -200,7 +200,39 @@ Verified: tsc build, eslint (0 warnings), prettier (clean), vite build (renderer
 
 Known limitation: spawning `python` from PATH assumes the machine running the app has a compatible Python with backend dependencies installed — acceptable for development, but a packaged/distributed build will need to bundle a Python runtime (future work, not solved this sprint)
 
-Sprint 5 — Pending Approval
+Sprint 5 — Completed (Real Filesystem, File CRUD, Live Watching)
+
+Goal:
+
+Build the real filesystem-backed Project Explorer, connect the Logger Panel to backend logs, add File Create/Rename/Delete/Open/Save, watch filesystem changes in real time, improve Electron ↔ Python IPC, add robust logging and error handling.
+
+Delivered:
+
+Filesystem ownership locked as Electron main (not Python) — `frontend/electron/filesystem.ts` (pure Node + chokidar, no Electron import — directly testable under plain Node), `frontend/electron/project-dialogs.ts` (native folder-picker dialogs, isolated from the CRUD/watch logic)
+
+Real Project Explorer: `ProjectExplorer.tsx` (empty state with Open Folder / New Project), `ExplorerTree.tsx` (root listing + create-at-root), `ExplorerTreeItem.tsx` (lazy IPC-backed children, hover actions, optimistic rename/delete), `InlineNameInput.tsx` (Electron has no native `window.prompt`, so this is the real create/rename UI) — replaces the Sprint 2 static mock tree entirely (mockProjectTree.ts deleted)
+
+File Create/Rename/Delete/Open/Save all real: create uses the `wx` flag for atomic duplicate detection; delete requires `window.confirm`; a minimal `FileEditor.tsx` (plain textarea, dirty-tracking, Ctrl+S) makes Open/Save genuinely work — deliberately no syntax highlighting, scope stated explicitly in docs/ARCHITECTURE.md
+
+Real-time filesystem watching via `chokidar`, ignoring node_modules/.git/dist/__pycache__/.venv/etc. — `openProject()` now awaits the watcher's `ready` event before resolving (fixes a race where a file created immediately after opening a project could be missed)
+
+Found and fixed a genuine Windows bug during verification: a short-path (8.3-style, e.g. `HAREKR~1`) watch root crashes chokidar's native watcher with an uncatchable libuv assertion — fixed by resolving to the real long-form path via `fs.realpath()` before watching, verified via a direct reproduction
+
+Backend `/logs` API: `GET /logs` (paginated, newest-first) + `POST /logs` (validated via pydantic, level restricted to INFO/WARNING/ERROR/DEBUG) — `LogsRepository.insert()` now returns the created row instead of just an id; added a `RequestValidationError` handler so pydantic validation errors also return the consistent `{"error": {"code","message"}}` shape
+
+Real Logger Panel: polls `window.nemi.backend.logs()` every 5s, replacing Sprint 2's mock entries entirely (mockLogEntries.ts deleted)
+
+File operations audit-log themselves to the backend's `logs` table via a new `frontend/electron/backend-client.ts::postLog()` (fire-and-forget, contained errors — a backend outage never breaks a file operation) — verified end-to-end: creating a file produced a real `fs.create` row visible via `GET /logs`
+
+Dashboard's "New Project" / "Open Project" buttons are no longer disabled stubs — both now trigger the real folder-picker flow via a new `frontend/src/project/` module (ProjectProvider/useProject/useOpenProjectDialog, following the Context+Provider+Hook pattern locked in Sprint 3/4), with the last-opened project persisted to localStorage and revalidated on launch
+
+`chokidar` added as a frontend dependency; `IconButton` gained `disabled` styling (used by the FileEditor's Save button)
+
+Verified: tsc build, eslint (0 warnings), prettier (clean), vite build (renderer + main + preload, chokidar bundles correctly); pytest (14 passed), ruff check (all checks passed), mypy strict (0 issues, 23 source files); a standalone Node smoke test (`npx tsx`, no Electron needed) exercised listDirectory/createFile/renameEntry/deleteEntry/readFile/writeFile plus the watcher against a real temp directory — including the short-path crash reproduction and fix; live end-to-end test — `npm run dev` spawned Electron + the real Python backend, `GET /logs` returned real rows, a file-create audit entry was confirmed to reach the database through the full Electron→backend pipeline, and a graceful window close cleanly terminated both the Electron and Python processes with nothing orphaned
+
+Known limitation: native-dialog-driven flows (the folder-picker itself) could not be scripted end-to-end in this environment (no OS dialog automation available here) — verified instead by exercising the underlying `filesystem.ts` functions directly, which is what the dialog handlers call after the user picks a path
+
+Sprint 6 — Pending Approval
 
 ---
 
@@ -300,13 +332,31 @@ Sprint 1 Completed
 
 ✔ Sprint 4 Verified (tsc, eslint, prettier, vite build, pytest ×10, ruff, mypy strict, live end-to-end Electron+backend launch with graceful shutdown all passing)
 
+✔ Sprint 5 Completed — Real Filesystem, File CRUD, Live Watching, Backend-Connected Logger Panel
+
+✔ Filesystem Ownership Locked as Electron Main (frontend/electron/filesystem.ts + project-dialogs.ts) — not routed through Python
+
+✔ Real Project Explorer (ExplorerTree, ExplorerTreeItem, InlineNameInput) — replaces the Sprint 2 static mock tree
+
+✔ File Create/Rename/Delete/Open/Save Implemented (atomic create via `wx` flag, delete confirmation, minimal FileEditor with Ctrl+S)
+
+✔ Real-Time Filesystem Watching via chokidar — watcher-ready race and a Windows short-path libuv crash found and fixed during verification
+
+✔ Backend /logs API (GET + POST, pydantic-validated) — LogsRepository.insert() now returns the created row; RequestValidationError handler added for consistent error shape
+
+✔ Real Logger Panel (polls window.nemi.backend.logs()) — replaces Sprint 2 mock entries
+
+✔ File-Operation Audit Logging (frontend/electron/backend-client.ts::postLog()) — verified end-to-end against the real backend
+
+✔ Dashboard New Project / Open Project Buttons Now Real (frontend/src/project/ — ProjectProvider/useProject/useOpenProjectDialog)
+
+✔ Sprint 5 Verified (tsc, eslint, prettier, vite build; pytest ×14, ruff, mypy strict; standalone Node smoke test of filesystem.ts against a real temp directory; live end-to-end Electron+backend launch with graceful shutdown all passing)
+
 ---
 
 # PENDING TASKS
 
 Workflow Design
-
-Dashboard: real filesystem-backed New Project / Open Project actions (currently honest disabled stubs)
 
 Memory Engine
 
@@ -320,13 +370,13 @@ Build System
 
 Python runtime bundling for packaged/distributed builds (currently assumes `python` on PATH — dev-mode only)
 
-Repositories/business logic for the remaining 7 tables (projects, tasks, files, agents, memory, settings, history) — schema exists, repositories deferred to the sprints that need them
-
-Real Project Explorer (filesystem-backed, replacing static placeholder tree)
-
-Real Logger Panel (wired to the backend's logs table, replacing static placeholder entries — backend now has real logs to show)
+Repositories/business logic for the remaining 7 tables (projects, tasks, files, agents, memory, settings, history) — schema exists, repositories deferred to the sprints that need them; `files` table remains intentionally unused (file content always comes from disk)
 
 Resizable/drag panel splitters (sidebar and logger panel are currently show/hide toggles only)
+
+FileEditor is a plain textarea by design (no syntax highlighting/language server) — a real code-editor experience (Monaco/CodeMirror) is future work
+
+Backend stdout/stderr are piped to Electron's console but not yet surfaced in the Logger Panel (which shows the SQLite `logs` table, not live process output)
 
 ---
 
@@ -476,17 +526,19 @@ Sprint 3 Completed — Architecture (docs/ARCHITECTURE.md), Database Design (doc
 
 Sprint 4 Completed — Backend finalized as FastAPI + Uvicorn; Electron ↔ Python process integration live (spawn, health-poll, graceful shutdown); SQLite DAL implemented (schema + LogsRepository); centralized logging and consistent error handling added; StatusBar wired to real backend health
 
+Sprint 5 Completed — Filesystem ownership locked as Electron main (not Python); real Project Explorer with File Create/Rename/Delete/Open/Save; real-time filesystem watching via chokidar (Windows short-path libuv crash found and fixed); backend /logs API (GET+POST); real Logger Panel; file-operation audit logging; Dashboard New/Open Project buttons made real
+
 ---
 
 # NEXT MILESTONE
 
-Sprint 5
+Sprint 6
 
-Real Project Explorer (filesystem-backed, replacing static placeholder tree) — natural next step now that a backend exists to read the filesystem through
+Repositories/business logic for the `projects` table — the natural next step now that projects are opened for real; would let recently-opened projects be tracked server-side instead of only in localStorage
 
-Real Logger Panel (wired to the backend's logs table via a new IPC endpoint, replacing static mock entries)
+Backend stdout/stderr surfaced in the Logger Panel (currently console-only)
 
-Projects repository + "New Project" / "Open Project" Dashboard actions (currently honest disabled stubs)
+Python runtime bundling strategy for packaged/distributed builds (still assumes `python` on PATH)
 
 ---
 

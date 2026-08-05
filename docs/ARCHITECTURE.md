@@ -1,8 +1,8 @@
 # ARCHITECTURE.md
 
-Version: 1.1
-Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4)
-Governs: Sprint 5 onward
+Version: 1.2
+Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5)
+Governs: Sprint 6 onward
 
 ---
 
@@ -78,9 +78,14 @@ outside world.
   design. As of Sprint 4 the schema is created automatically at
   backend startup (`app/db/schema.py::init_db`) into
   `database/nemi.db`. Only the `logs` table has a repository
-  (`app/db/repositories/logs_repository.py`) so far — the other seven
-  tables are schema-ready but have no repository/business logic yet,
+  (`app/db/repositories/logs_repository.py`) so far, now with a real
+  `GET /logs` + `POST /logs` API (Sprint 5) — the other seven tables
+  are schema-ready but have no repository/business logic yet,
   intentionally deferred to the sprints that need them.
+- Filesystem — as of Sprint 5, real project files on disk. Ownership
+  is Electron main, not the Python backend; see FILESYSTEM OWNERSHIP
+  below. The `files` SQLite table remains unused (no repository) —
+  file content always comes from disk directly, never from SQLite.
 - `logs/` — now actively used: the backend's rotating file log lives
   at `logs/backend.log` (see LOGGING below). `memory/`, `config/`,
   `projects/` remain reserved per MASTER_SPECIFICATION's FOLDER
@@ -108,12 +113,16 @@ Three processes, already implemented and hardened in Sprint 2:
 ## IPC Boundary (locked decision)
 
 All renderer → native calls go through `window.nemi`
-(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 4
-this surface has two namespaces: `windowControls` (Sprint 2) and
-`backend` (Sprint 4, currently just `health()`). Future filesystem,
-database, or AI-agent triggers must be added here first, as a typed
+(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 5
+this surface has three namespaces: `windowControls` (Sprint 2),
+`backend` (Sprint 4: `health()`; Sprint 5: `logs()`), and `fs`
+(Sprint 5: project/file CRUD + change notifications). Future
+database or AI-agent triggers must be added here first, as a typed
 method, before any component may call them. A component must never
-assume Node.js globals exist.
+assume Node.js globals exist. All ambient types shared across
+`window.nemi` methods (`ExplorerEntry`, `LogEntry`, `BackendHealth`,
+etc.) live inside the `declare global` block of `electron-api.d.ts`
+so they're usable anywhere in the renderer without imports.
 
 The renderer never talks to the backend HTTP API directly — it has no
 network access to it, and the CSP's `connect-src 'self'` intentionally
@@ -191,6 +200,93 @@ sprint (packaging is explicitly a later MASTER_SPECIFICATION phase).
 
 ---
 
+# FILESYSTEM OWNERSHIP (locked decision — Sprint 5)
+
+**Owner**: Electron main process (`frontend/electron/filesystem.ts`),
+not the Python backend. File read/write/create/rename/delete and
+real-time watching all happen in Node, relayed to the renderer via
+the same IPC-relay pattern as the backend HTTP calls.
+
+**Why not route file I/O through Python**: no cross-machine scenario
+exists, no business logic is applied to file bytes yet, and Electron
+main already has direct, sandboxed-safe filesystem access. Routing
+every file read/write through an HTTP round-trip to the backend would
+add latency and complexity for zero benefit at this stage — this
+matches how desktop IDEs are conventionally built (main/extension-host
+process owns disk I/O). The `files` SQLite table (see
+`docs/DATABASE_SCHEMA.md`) remains a future indexing/search feature,
+not a content store — this was already anticipated when that table
+was designed in Sprint 3.
+
+**Modules**:
+
+- `filesystem.ts` — pure Node (`fs`, `path`, `chokidar`), no Electron
+  imports. `listDirectory`, `readFile` (2 MB cap — see below),
+  `writeFile`, `createFile` (atomic via the `wx` flag, rejects if the
+  name already exists), `renameEntry`, `deleteEntry`,
+  `openProject`/`closeProject` (start/stop the watcher),
+  `setChangeListener`. Being Electron-free, this module can be
+  exercised directly under plain Node (`npx tsx`) against a real
+  temp directory — used in Sprint 5 to verify the CRUD operations and
+  the watcher without needing the full Electron+IPC+UI stack.
+- `project-dialogs.ts` — the only module that imports Electron's
+  `dialog`/`BrowserWindow`. `selectProjectFolder(window, mode)`:
+  `'open'` shows a native folder picker; `'new'` repurposes
+  `showSaveDialog` (lets the user navigate to a location and type a
+  name) then `fs.mkdir`s it. Kept separate from `filesystem.ts`
+  specifically so the CRUD/watch logic has no Electron dependency.
+- `backend-client.ts` — `fetchRecentLogs()`, `postLog()`
+  (fire-and-forget, contained errors), `checkHealth()`. File
+  operations call `postLog()` after succeeding, writing an audit
+  entry (`fs.create` / `fs.rename` / `fs.delete` / `fs.save` /
+  `fs.project`) into the backend's `logs` table — the same table the
+  Logger Panel reads via `GET /logs`. A backend outage never breaks a
+  file operation; `postLog` swallows its own errors.
+
+**Real-time watching**: `chokidar`, ignoring
+`node_modules`/`.git`/`dist`/`dist-electron`/`__pycache__`/`.venv`/
+`.pytest_cache`/`.ruff_cache`/`.mypy_cache`. `openProject()` awaits
+the watcher's `ready` event before resolving — otherwise a file
+created immediately after "opening" a project could race the
+watcher's setup and go unnoticed. Renderer subscribes via
+`window.nemi.fs.onChange(...)`; `ProjectExplorer` bumps a
+`watchVersion` counter on every event, which every expanded
+`ExplorerTreeItem` depends on to refetch its children. Locally
+triggered CRUD actions also refresh optimistically (immediate
+`listDirectory` re-fetch, or local hide/rename on delete/rename) so
+the UI doesn't wait on the watcher round-trip for actions the user
+just took themselves.
+
+**Known Windows gotcha (found and fixed in Sprint 5)**: if the
+watched root path resolves through a short (8.3-style) path alias —
+e.g. `C:\Users\HAREKR~1\...` instead of `C:\Users\Hare Krishna\...`,
+which is what `os.tmpdir()` returned in the Sprint 5 dev/test
+environment — chokidar's native Windows watcher hits a libuv
+assertion (`fs-event.c`) and **crashes the whole process**. This is
+not a catchable JS exception. Fix: `openProject()` calls
+`fs.realpath()` on the target before watching, which reliably
+resolves short-path aliases to their long form. Verified: the exact
+crash reproduced on a short-path root and was gone after the fix,
+while a normal long-path root (e.g. a folder under the repo itself)
+never exhibited the bug. Real project folders selected via the native
+folder picker return long paths already, so this mainly guards an
+edge case — but a native crash is severe enough to defend against
+regardless of how rarely it's hit.
+
+**File size guard**: `readFile()` rejects files over 2 MB with a
+clear error rather than reading an arbitrarily large file into a
+renderer `<textarea>` — a deliberate, honest limitation (no chunked
+loading or virtualized editor exists yet), not a silent failure.
+
+**Editor scope (deliberately minimal)**: `FileEditor.tsx` is a plain
+`<textarea>` with dirty-tracking and Ctrl+S — no syntax highlighting,
+no language server, no diffing. A real code-editor experience
+(Monaco/CodeMirror) is out of scope for this sprint; this component
+exists only to make "Open" and "Save" genuinely work end-to-end
+without fabricating capability the app doesn't have.
+
+---
+
 # PLUGIN / EXTENSION ARCHITECTURE (future — not started)
 
 MASTER_SPECIFICATION.md lists "Plugin Marketplace" under FUTURE
@@ -228,6 +324,19 @@ must never run with Node.js integration in the renderer.
    `{"error": {"code", "message"}}` JSON shape via global FastAPI
    exception handlers; unhandled exceptions are logged with full
    traceback server-side and never leak internals to the client.
+9. **(Sprint 5)** Filesystem I/O and real-time watching are owned by
+   Electron main (`filesystem.ts`, pure Node + chokidar), not the
+   Python backend — no cross-machine scenario exists yet to justify
+   the round-trip. Dialog-specific code is isolated in
+   `project-dialogs.ts` so the CRUD/watch logic stays Electron-free
+   and directly testable under plain Node.
+10. **(Sprint 5)** File operations audit-log themselves to the
+    backend's `logs` table via `postLog()` (fire-and-forget, errors
+    contained) — the same data source the Logger Panel reads, so
+    "robust logging" means one real pipeline, not two.
+11. **(Sprint 5)** `openProject()` always resolves the real
+    (long-form) path via `fs.realpath()` before watching, to avoid a
+    Windows-specific libuv crash on short-path aliases.
 
 ---
 

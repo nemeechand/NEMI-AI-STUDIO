@@ -1,10 +1,13 @@
 import { ThemeProvider } from './theme/ThemeProvider';
+import { ProjectProvider } from './project/ProjectProvider';
 import { AppShell } from './components/layout/AppShell';
 
 function App() {
   return (
     <ThemeProvider>
-      <AppShell />
+      <ProjectProvider>
+        <AppShell />
+      </ProjectProvider>
     </ThemeProvider>
   );
 }

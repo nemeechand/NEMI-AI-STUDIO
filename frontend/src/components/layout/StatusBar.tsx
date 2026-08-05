@@ -49,7 +49,7 @@ export function StatusBar() {
     <footer className="flex h-6 shrink-0 items-center justify-between border-t border-border bg-accent px-3 text-xs text-accent-fg">
       <div className="flex items-center gap-3">
         <span>NEMI AI STUDIO</span>
-        <span>Sprint 4 — Backend Integration</span>
+        <span>Sprint 5 — File System</span>
       </div>
       <div className="flex items-center gap-3">
         <span className="capitalize">{theme} theme</span>

@@ -7,9 +7,8 @@ from app.server import create_app
 
 
 def test_health_endpoint_returns_ok() -> None:
-    client = TestClient(create_app())
-
-    response = client.get("/health")
+    with TestClient(create_app()) as client:
+        response = client.get("/health")
 
     assert response.status_code == 200
     body = response.json()
@@ -19,9 +18,8 @@ def test_health_endpoint_returns_ok() -> None:
 
 
 def test_unknown_route_returns_structured_error() -> None:
-    client = TestClient(create_app())
-
-    response = client.get("/does-not-exist")
+    with TestClient(create_app()) as client:
+        response = client.get("/does-not-exist")
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "http_error"

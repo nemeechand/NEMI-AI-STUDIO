@@ -26,7 +26,7 @@ class LogsRepository:
         source: str,
         message: str,
         project_id: str | None = None,
-    ) -> str:
+    ) -> dict[str, Any]:
         entry_id = str(uuid4())
         created_at = datetime.now(UTC).isoformat()
         self._connection.execute(
@@ -37,7 +37,14 @@ class LogsRepository:
             (entry_id, project_id, level, source, message, created_at),
         )
         self._connection.commit()
-        return entry_id
+        return {
+            "id": entry_id,
+            "project_id": project_id,
+            "level": level,
+            "source": source,
+            "message": message,
+            "created_at": created_at,
+        }
 
     def list_recent(self, limit: int = 50) -> list[dict[str, Any]]:
         rows = self._connection.execute(

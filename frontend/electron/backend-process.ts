@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
+import { BACKEND_HOST, BACKEND_PORT, checkHealth } from './backend-client';
 
 export type BackendState = 'starting' | 'ready' | 'error' | 'stopped';
 
@@ -9,12 +10,8 @@ export interface BackendHealth {
   message?: string;
 }
 
-const BACKEND_HOST = '127.0.0.1';
-const BACKEND_PORT = 8756;
-const HEALTH_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}/health`;
 const STARTUP_TIMEOUT_MS = 15_000;
 const POLL_INTERVAL_MS = 300;
-const HEALTH_CHECK_TIMEOUT_MS = 1_000;
 
 let child: ChildProcess | null = null;
 let state: BackendState = 'stopped';
@@ -34,9 +31,7 @@ async function waitForHealthy(timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(HEALTH_URL, {
-        signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS),
-      });
+      const response = await checkHealth();
       if (response.ok) return;
     } catch {
       // Backend not accepting connections yet — keep polling.

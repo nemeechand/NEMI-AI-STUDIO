@@ -46,11 +46,14 @@ def test_logs_repository_insert_and_list_recent() -> None:
     init_db(connection)
     repository = LogsRepository(connection)
 
-    entry_id = repository.insert(level="INFO", source="test", message="hello")
+    created = repository.insert(level="INFO", source="test", message="hello")
     recent = repository.list_recent(limit=10)
 
+    assert created["level"] == "INFO"
+    assert created["source"] == "test"
+    assert created["message"] == "hello"
     assert len(recent) == 1
-    assert recent[0]["id"] == entry_id
+    assert recent[0]["id"] == created["id"]
     assert recent[0]["level"] == "INFO"
     assert recent[0]["source"] == "test"
     assert recent[0]["message"] == "hello"

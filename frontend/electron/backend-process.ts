@@ -1,3 +1,4 @@
+import { app } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { BACKEND_HOST, BACKEND_PORT, checkHealth } from './backend-client';
@@ -18,8 +19,13 @@ let state: BackendState = 'stopped';
 let lastError: string | undefined;
 
 function resolveBackendDir(electronDirname: string): string {
-  // electron/main.ts compiles to frontend/dist-electron/main.js, so the
-  // backend package lives two levels up and then into backend/.
+  if (app.isPackaged) {
+    // electron-builder ships backend/ as an extraResource (see
+    // frontend/package.json "build" config), unpacked next to the app.
+    return path.join(process.resourcesPath, 'backend');
+  }
+  // Dev mode: electron/main.ts compiles to frontend/dist-electron/main.js,
+  // so the backend package lives two levels up and then into backend/.
   return path.join(electronDirname, '..', '..', 'backend');
 }
 
@@ -65,9 +71,13 @@ export function startBackend(electronDirname: string): void {
     console.error(`[backend] ${chunk.toString().trim()}`);
   });
 
-  proc.on('error', (error) => {
+  proc.on('error', (error: NodeJS.ErrnoException) => {
     state = 'error';
-    lastError = error.message;
+    lastError =
+      error.code === 'ENOENT'
+        ? 'Python was not found on this system. Install Python 3.11+ and the ' +
+          'backend dependencies (see backend/requirements.txt) to enable AI Studio.'
+        : error.message;
   });
 
   proc.on('exit', (code) => {

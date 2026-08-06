@@ -232,6 +232,26 @@ Verified: tsc build, eslint (0 warnings), prettier (clean), vite build (renderer
 
 Known limitation: native-dialog-driven flows (the folder-picker itself) could not be scripted end-to-end in this environment (no OS dialog automation available here) — verified instead by exercising the underlying `filesystem.ts` functions directly, which is what the dialog handlers call after the user picks a path
 
+Windows Alpha Build 1 — Completed (0.1.0-alpha.1)
+
+Goal:
+
+Package everything delivered through Sprint 5 into a distributable Windows build using Electron Builder.
+
+Delivered:
+
+`electron-builder` configured in `frontend/package.json` (`"build"` field) — appId `com.nemi.aistudio`, productName "NEMI AI STUDIO", NSIS installer + portable targets (x64), extraResources bundling the full `backend/` source into the packaged app
+
+Generated `frontend/build/icon.ico` (7 resolutions) + `icon.png` — a placeholder "N" monogram in the app's existing accent blue, noted as needing a real brand identity before Beta/GA
+
+`backend-process.ts::resolveBackendDir()` now branches on `app.isPackaged` to resolve the backend via `process.resourcesPath` in packaged builds (dev-mode path resolution doesn't apply once bundled); Python-not-found errors now produce a specific, actionable StatusBar message instead of a raw Node error
+
+Version bumped to `0.1.0-alpha.1`
+
+Verified on this machine: NSIS installer silently installed, correct files/shortcuts, installed app launched and its bundled backend passed a real `GET /health` check, graceful close left nothing orphaned, silent uninstall left the machine clean; portable exe launched standalone with the same working pipeline. No packaging defects found. Full detail in `docs/ALPHA_BUILD_REPORT.md`
+
+Known limitation (deliberate, documented): this Alpha still requires Python 3.11+ pre-installed on the target machine — no standalone Python runtime is bundled yet (e.g. via PyInstaller); the installer is also unsigned (no code-signing certificate). Both are recommended as the top priorities for a Beta build
+
 Sprint 6 — Pending Approval
 
 ---
@@ -352,9 +372,17 @@ Sprint 1 Completed
 
 ✔ Sprint 5 Verified (tsc, eslint, prettier, vite build; pytest ×14, ruff, mypy strict; standalone Node smoke test of filesystem.ts against a real temp directory; live end-to-end Electron+backend launch with graceful shutdown all passing)
 
+✔ Windows Alpha Build 1 Completed — electron-builder configured (NSIS + portable), application icon generated, version bumped to 0.1.0-alpha.1
+
+✔ Alpha Build Verified (installer install/uninstall, portable exe, both launched with working bundled backend, no orphaned processes)
+
 ---
 
 # PENDING TASKS
+
+Standalone Python runtime bundling for the installer (PyInstaller or equivalent) — top priority before a Beta build
+
+Code-signing certificate for the installer (currently unsigned)
 
 Workflow Design
 
@@ -528,6 +556,8 @@ Sprint 4 Completed — Backend finalized as FastAPI + Uvicorn; Electron ↔ Pyth
 
 Sprint 5 Completed — Filesystem ownership locked as Electron main (not Python); real Project Explorer with File Create/Rename/Delete/Open/Save; real-time filesystem watching via chokidar (Windows short-path libuv crash found and fixed); backend /logs API (GET+POST); real Logger Panel; file-operation audit logging; Dashboard New/Open Project buttons made real
 
+Windows Alpha Build 1 Completed (0.1.0-alpha.1) — electron-builder producing an NSIS installer and portable exe, application icon generated, verified install/launch/uninstall on Windows; still requires Python pre-installed on the target machine (documented, not solved this build)
+
 ---
 
 # NEXT MILESTONE
@@ -538,7 +568,7 @@ Repositories/business logic for the `projects` table — the natural next step n
 
 Backend stdout/stderr surfaced in the Logger Panel (currently console-only)
 
-Python runtime bundling strategy for packaged/distributed builds (still assumes `python` on PATH)
+Standalone Python runtime bundling (PyInstaller or equivalent) for a Beta build — the packaging pipeline itself is now proven (Alpha Build 1), this is the remaining gap before the app runs with zero prerequisites
 
 ---
 

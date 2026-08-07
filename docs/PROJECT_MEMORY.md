@@ -292,6 +292,14 @@ A 17-point deep verification (Playwright-driven, built app, zero console/page er
 
 No code changes were required this pass — every check passed against the code already pushed in the two prior Sprint 6 commits. `docs/SPRINT_6_FINAL_REPORT.md` created with the full evidence log
 
+Final Release Verification (Packaged App) — Completed
+
+A stricter follow-up pass, launching the actual distributable rather than a dev-mode build: killed all processes, deleted all build/runtime artifacts, then ran `npm run dist:win` (the real `electron-builder` packaging pipeline — NSIS installer + portable exe, same as `docs/ALPHA_BUILD_REPORT.md`) and launched `release\win-unpacked\NEMI AI STUDIO.exe` directly (`app.isPackaged: true`, the exact binary + `app.asar` + bundled `resources/backend` both the installer and portable exe ship)
+
+All 15 requested checks passed: window opens, no black screen, Dashboard renders, `window.nemi` present, backend auto-starts and reaches ready, StatusBar shows Ready, Logger receives `backend.startup`/`backend.stdout`, Explorer opens a folder (via the app's own real "reopen remembered project" `localStorage` mechanism in `ProjectProvider.tsx`, since the native folder-picker dialog itself is outside what DOM automation can drive — same documented boundary as Sprint 5), and real UI-level open/save/create/rename/delete file operations against a real temp project all succeeded, the backend health endpoint answered `200` over a direct external HTTP request, and shutdown left zero orphaned `electron.exe`/`NEMI AI STUDIO.exe`/`python.exe`/`node.exe` processes. Zero console errors, zero page errors, zero backend/IPC failures across the whole run
+
+No code changes were required — this was the actual shipped artifact working correctly. `docs/FINAL_RELEASE_VERIFICATION.md` created with full evidence (build checksums, per-item results, methodology)
+
 Sprint 7 — Pending Approval
 
 ---

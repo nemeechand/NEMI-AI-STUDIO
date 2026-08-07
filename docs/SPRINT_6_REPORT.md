@@ -15,16 +15,23 @@ Date: 07 August 2026
 4. Surfaced backend `stdout`/`stderr` in the Logger Panel (previously console-only, a known pending item) by reusing the existing `postLog()` pipeline; added a level filter dropdown to the Logger Panel.
 5. Fixed a real performance issue in the Project Explorer: every raw chokidar filesystem event triggered an immediate renderer refetch of every expanded folder — a bulk operation (e.g. `npm install`, a git checkout) could fire hundreds of redundant IPC round-trips in a burst. Debounced watcher notifications (300ms trailing) to coalesce these into one. Added a loading indicator for folder expansion.
 6. Reserved (documentation only, per `agents/architect.md`) the architecture for a future AI Chat Panel and Code Editor in `docs/ARCHITECTURE.md` — no code written.
-7. Ran the full verification suite and a live, Playwright-driven launch of the actual built app (not just `npm run dev`) to confirm the preload fix and every new feature end-to-end.
-8. Updated `docs/PROJECT_MEMORY.md` and generated this report.
+7. Fixed a real dev-workflow bug: `npm run dev` crashes on launch whenever run from a process descended from VS Code's extension host (as this project is, via Claude Code), because that host runs Electron in `ELECTRON_RUN_AS_NODE=1` mode and the setting is inherited by the Electron child process `vite-plugin-electron` spawns. Fixed in `frontend/vite.config.ts` by clearing the variable before the dev server spawns Electron. See the dedicated section below for the full investigation.
+8. Ran the full verification suite and both a live Playwright-driven launch of the built app and a live `npm run dev` launch (with the problematic environment variable deliberately still present) to confirm both the preload fix and the `ELECTRON_RUN_AS_NODE` fix end-to-end.
+9. Updated `docs/PROJECT_MEMORY.md` and generated this report.
 
 ---
 
-# A MISDIAGNOSIS FOUND AND CORRECTED DURING VERIFICATION
+# A ROOT-CAUSE INVESTIGATION, A MISDIAGNOSIS, AND THE ACTUAL FIX
 
-While root-causing the preload bug, a minimal reproduction (`import { app } from 'electron'` in a 2-line ESM file) crashed with a Node.js internal ESM-loader error, and crashed identically against the last committed code — appearing to be a second, deeper, pre-existing bug independent of the preload path mismatch. A CJS-build-output fix was designed, implemented, and verified working end-to-end (window created, IPC registered, backend spawned).
+While root-causing the preload bug, a minimal reproduction (`import { app } from 'electron'` in a 2-line ESM file) crashed with a Node.js internal ESM-loader error, and crashed identically against the last committed code — appearing to be a second, deeper, pre-existing bug independent of the preload path mismatch. A CJS-build-output fix was designed, implemented, and verified working end-to-end.
 
-Before committing to that larger change, the same minimal reproduction was re-run with the verification shell's environment cleared, and it succeeded — the crash was caused by `ELECTRON_RUN_AS_NODE=1` being set in that shell (which makes Electron run as plain Node instead of the actual app, so `require('electron')` returns a path string instead of the API object), not a real defect in the application or its dependencies. The CJS build change was reverted in favor of the original minimal fix, keeping the change scoped to what the actual bug required. This is recorded here because the incorrect finding was already reported before being caught — see `agents/debugger.md`'s "never guess... always reproduce" principle: the reproduction was real, but the environment it ran in was not representative of a normal launch, and that gap wasn't checked until after the finding was shared.
+That fix was then reverted after re-running the same reproduction with `ELECTRON_RUN_AS_NODE` manually cleared from the shell, which succeeded — at that point the crash was (incorrectly) written off as pure test-environment noise with no real-world impact, and Sprint 6 was reported complete and pushed on that basis.
+
+That conclusion was wrong in its scope, and was corrected after further investigation prompted by re-testing: `ELECTRON_RUN_AS_NODE=1` is not a random leftover — it is set at the **Process** environment scope (confirmed via `[System.Environment]::GetEnvironmentVariable(..., "Process")`; both `"User"` and `"Machine"` scopes are empty) and is inherited from the VS Code **extension host** process this Claude Code session runs under (`VSCODE_ESM_ENTRYPOINT=vs/workbench/api/node/extensionHostProcess` in the environment) — VS Code's extension host is itself an Electron process running in "run as Node" mode, and that setting propagates to every child process spawned from it, including `npm run dev`. This is a real, structural characteristic of developing this app via Claude Code inside VS Code (and plausibly other Electron-hosted dev tools), not a one-off fluke — every `npm run dev` launched this way would silently fail with `ipcMain`/`app`/`BrowserWindow` all undefined, because `require('electron')` resolves to a path-string shim instead of the real API whenever `ELECTRON_RUN_AS_NODE` is set.
+
+**The actual fix**: `frontend/vite.config.ts` now deletes `ELECTRON_RUN_AS_NODE` from `process.env` before `vite-plugin-electron` spawns the Electron dev process (`child_process.spawn(electronPath, argv, { stdio: 'inherit', ...options })` inherits `process.env` by reference, so clearing the key at config-load time is visible at spawn time). Verified by running `npm run dev` with the ambient variable still set (unmodified, exactly as inherited) — Electron launched successfully (4 process tree, window created) and the Python backend started and logged "NEMI backend ready" through the pipeline this same sprint added to the Logger Panel. A direct `electron.exe .` invocation from a shell still carrying the inherited variable (bypassing `npm run dev`/vite entirely) still fails as expected — that path is outside this fix's scope, but it's also not how any real launch happens: a packaged app double-clicked by an end user is not a descendant of the VS Code extension host process tree, so it never inherits this variable in the first place (confirmed via the Process/User/Machine scope check above).
+
+Recorded in full because the earlier, published finding ("not a real defect, no code change needed") was itself an overcorrection — see `agents/debugger.md`'s "never guess... always reproduce" and "fix root cause... never patch symptoms": the reproduction was real both times, but the conclusion from clearing the variable manually — that it therefore didn't matter — was not re-examined against how `npm run dev` is actually invoked in this environment until asked to look again.
 
 ---
 
@@ -43,6 +50,7 @@ No new application source files were created this sprint — every change modifi
 - `frontend/electron/backend-process.ts` — `BackendHealth` extended with `version`/`uptimeSeconds`, captured from `/health` at startup and refreshed in the background on each `getBackendHealth()` call while ready; `startBackend()`'s stdout/stderr handlers now also forward each line to `postLog()` (`backend.stdout` at DEBUG, `backend.stderr` at WARNING).
 - `frontend/electron/backend-client.ts` — added the `HealthResponse` interface (`version`, `env`, `uptime_seconds`) matching the backend's `/health` response shape.
 - `frontend/electron/filesystem.ts` — watcher change notifications debounced (300ms trailing) instead of firing one notification per raw chokidar event.
+- `frontend/vite.config.ts` — deletes `ELECTRON_RUN_AS_NODE` from `process.env` before `vite-plugin-electron` spawns the Electron dev process, so `npm run dev` works regardless of whether the parent process (e.g. VS Code's extension host) has that variable set.
 
 **Renderer**
 - `frontend/src/types/electron-api.d.ts` — `BackendHealth` ambient type extended with `version?`/`uptimeSeconds?`.
@@ -72,6 +80,7 @@ No new application source files were created this sprint — every change modifi
 | `ruff check` | All checks passed |
 | `mypy --strict` | No issues, 23 source files |
 | Live launch (Playwright-driven, built app) | `window.nemi` confirmed present; `window.nemi.backend.health()` reached `ready` with real `version`/`uptimeSeconds`; StatusBar tooltip rendered `NEMI Backend v0.1.0 — up 0s`; Logger Panel's level filter (`ALL/INFO/WARNING/ERROR/DEBUG`) present and functional; a real `backend.stdout` log entry (from the backend's own startup output) was visible and correctly filtered under the DEBUG level; Project Explorer and Dashboard rendered correctly; app closed cleanly with no orphaned processes |
+| Live `npm run dev` launch, `ELECTRON_RUN_AS_NODE=1` deliberately left set | Electron launched successfully (4-process tree observed via `tasklist`), Python backend spawned and logged "NEMI backend ready on 127.0.0.1:8756" through the same-sprint stdout-forwarding pipeline — this is the exact failure this fix targets, reproduced and confirmed resolved |
 
 ---
 
@@ -91,7 +100,15 @@ No new application source files were created this sprint — every change modifi
 
 ---
 
-# GIT COMMIT MESSAGE
+# GIT COMMIT MESSAGES
+
+This sprint shipped as two commits: an initial commit (pushed, then
+found to be incomplete — the dev-launch crash reported afterward was
+real) and a follow-up fix committed once the actual cause was found
+and verified. Recorded as history, not amended, per this project's
+git policy of never rewriting already-pushed commits.
+
+**Commit 1** (`4ef946c`):
 
 ```
 fix(sprint-6): fix black-screen preload bug, stabilize Alpha build
@@ -117,6 +134,35 @@ Code Editor in docs/ARCHITECTURE.md. Remove leftover debugging
 artifacts (_cdp_check*.mjs, stray hello.py) from a prior session.
 
 Update docs/PROJECT_MEMORY.md and add docs/SPRINT_6_REPORT.md.
+```
+
+**Commit 2** (follow-up):
+
+```
+fix(sprint-6): fix npm run dev crash under ELECTRON_RUN_AS_NODE
+
+The first Sprint 6 commit was pushed after concluding a second
+Electron crash found during verification was test-environment noise,
+not a real defect. That conclusion was wrong: ELECTRON_RUN_AS_NODE=1
+is inherited from VS Code's extension host (this project is developed
+via Claude Code inside VS Code) and is set at the Process environment
+scope, not User/Machine — meaning it silently breaks every `npm run
+dev` launched this way, since vite-plugin-electron's spawn() inherits
+process.env by default and Electron then runs as plain Node instead
+of the real app (require('electron') returns a path string, so app/
+ipcMain/BrowserWindow are all undefined).
+
+Fix: frontend/vite.config.ts now deletes ELECTRON_RUN_AS_NODE from
+process.env before vite-plugin-electron spawns Electron. Verified by
+running npm run dev with the variable deliberately left set: Electron
+launched successfully and the Python backend started and logged
+through the Logger Panel pipeline. A packaged app double-clicked by a
+real user is unaffected regardless (it's never a descendant of the
+VS Code extension host process tree), so this only had to be fixed at
+the dev-server spawn point.
+
+Update docs/SPRINT_6_REPORT.md and docs/PROJECT_MEMORY.md with the
+corrected investigation record.
 ```
 
 ---

@@ -23,6 +23,25 @@ const IGNORED_NAMES = new Set([
 
 const MAX_READABLE_FILE_BYTES = 2 * 1024 * 1024; // 2 MB — see docs/ARCHITECTURE.md
 
+// Sprint 9: Quick Open / Global Search traversal caps — keep a huge repo
+// from making either feature hang. Both walk the same directory tree
+// listDirectory()/the watcher already ignore (IGNORED_NAMES).
+const MAX_LIST_ALL_FILES = 5000;
+const MAX_SEARCH_RESULTS = 500;
+const MAX_SEARCHABLE_FILE_BYTES = MAX_READABLE_FILE_BYTES;
+
+export interface SearchMatch {
+  path: string;
+  line: number;
+  column: number;
+  lineText: string;
+}
+
+export interface SearchOptions {
+  caseSensitive?: boolean;
+  useRegex?: boolean;
+}
+
 // Coalesces bursts of watcher events (e.g. `npm install`, a git checkout can
 // fire hundreds of add/change events in milliseconds) into a single
 // notification, instead of one renderer refetch per raw filesystem event.
@@ -64,6 +83,98 @@ export async function listDirectory(dirPath: string): Promise<ExplorerEntry[]> {
   });
 
   return entries;
+}
+
+/** Depth-first recursive walk of every file under `rootPath`, respecting
+ * the same IGNORED_NAMES the Explorer/watcher already use. Stops early
+ * once `onFile` returns `false` (used by both callers below to enforce
+ * their own result caps without walking a huge tree needlessly). */
+async function walkFiles(rootPath: string, onFile: (filePath: string) => boolean): Promise<void> {
+  const names = await fs.readdir(rootPath).catch(() => [] as string[]);
+  for (const name of names) {
+    if (IGNORED_NAMES.has(name)) continue;
+    const entryPath = path.join(rootPath, name);
+    const type = await statType(entryPath);
+    if (type === 'folder') {
+      await walkFiles(entryPath, onFile);
+    } else if (type === 'file') {
+      if (!onFile(entryPath)) return;
+    }
+  }
+}
+
+/** Quick Open (Ctrl+P): every file path under the project root, capped so
+ * an unusually large repository can't hang the picker. */
+export async function listAllFiles(rootPath: string): Promise<string[]> {
+  const results: string[] = [];
+  await walkFiles(rootPath, (filePath) => {
+    results.push(filePath);
+    return results.length < MAX_LIST_ALL_FILES;
+  });
+  return results;
+}
+
+/** Global Search (Ctrl+Shift+F): plain-substring or regex search across
+ * every file under the project root. Skips files over the same size guard
+ * `readFile()` uses, and any file that fails to read as UTF-8 text
+ * (binary files) — both silently skipped, not errors. */
+export async function searchInFiles(
+  rootPath: string,
+  query: string,
+  options: SearchOptions = {},
+): Promise<SearchMatch[]> {
+  if (!query) return [];
+
+  const matcher = options.useRegex ? new RegExp(query, options.caseSensitive ? 'g' : 'gi') : null;
+  const plainQuery = options.caseSensitive ? query : query.toLowerCase();
+
+  const results: SearchMatch[] = [];
+
+  async function searchOneFile(filePath: string): Promise<void> {
+    try {
+      const stats = await fs.stat(filePath);
+      if (stats.size > MAX_SEARCHABLE_FILE_BYTES) return;
+      const content = await fs.readFile(filePath, 'utf-8');
+      const lines = content.split('\n');
+      for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+        if (results.length >= MAX_SEARCH_RESULTS) return;
+        const lineText = lines[lineIndex];
+        if (matcher) {
+          matcher.lastIndex = 0;
+          const match = matcher.exec(lineText);
+          if (match) {
+            results.push({
+              path: filePath,
+              line: lineIndex + 1,
+              column: match.index + 1,
+              lineText,
+            });
+          }
+        } else {
+          const haystack = options.caseSensitive ? lineText : lineText.toLowerCase();
+          const column = haystack.indexOf(plainQuery);
+          if (column !== -1) {
+            results.push({ path: filePath, line: lineIndex + 1, column: column + 1, lineText });
+          }
+        }
+      }
+    } catch {
+      // Binary/unreadable file — skip silently, not an error.
+    }
+  }
+
+  const filesToSearch: string[] = [];
+  await walkFiles(rootPath, (filePath) => {
+    filesToSearch.push(filePath);
+    return filesToSearch.length < MAX_LIST_ALL_FILES;
+  });
+
+  for (const filePath of filesToSearch) {
+    if (results.length >= MAX_SEARCH_RESULTS) break;
+    await searchOneFile(filePath);
+  }
+
+  return results;
 }
 
 export async function readFile(filePath: string): Promise<string> {

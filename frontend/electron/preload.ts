@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { BackendHealth } from './backend-process';
 import type { LogEntry, ProjectRecord } from './backend-client';
-import type { ExplorerEntry } from './filesystem';
+import type { ExplorerEntry, SearchMatch, SearchOptions } from './filesystem';
 
 const backend = {
   health: (): Promise<BackendHealth> => ipcRenderer.invoke('backend:health'),
@@ -27,6 +27,13 @@ const fsApi = {
     ipcRenderer.invoke('fs:rename-entry', entryPath, newName),
   deleteEntry: (entryPath: string): Promise<void> =>
     ipcRenderer.invoke('fs:delete-entry', entryPath),
+  listAllFiles: (rootPath: string): Promise<string[]> =>
+    ipcRenderer.invoke('fs:list-all-files', rootPath),
+  searchInFiles: (
+    rootPath: string,
+    query: string,
+    options?: SearchOptions,
+  ): Promise<SearchMatch[]> => ipcRenderer.invoke('fs:search-in-files', rootPath, query, options),
   onChange: (callback: (event: { path: string }) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: { path: string }) =>
       callback(payload);

@@ -1,6 +1,6 @@
 # ARCHITECTURE.md
 
-Version: 1.5
+Version: 1.6
 Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8)
 Governs: Sprint 9 onward
 
@@ -32,13 +32,23 @@ Location: `frontend/src`
 - `components/settings/` — Settings modal.
 - `components/workspace/` (Sprint 7) — Workspace Manager panel and New
   Project Wizard modal; see WORKSPACE & PROJECT MANAGEMENT below.
+- `components/editor/` (Sprint 9) — `MonacoEditorPane.tsx`, `TabStrip.tsx`,
+  `QuickOpen.tsx`, `monacoSetup.ts`, `languageForPath.ts`,
+  `modelRegistry.ts`; see MONACO CODE EDITOR below.
+- `components/search/` (Sprint 9) — Global Search Sidebar panel.
+- `commands/` (Sprint 9) — Command Palette registry and `useCommand()`
+  hook; see MONACO CODE EDITOR below.
 - `components/common/` — shared, reusable, presentation-only primitives
   (e.g. `IconButton`). A component belongs here only if it has no
   feature-specific knowledge.
-- `theme/`, `project/`, `workspace/` — cross-cutting frontend state
-  (Theme Manager, active-project state, and workspace/session
-  persistence respectively), each following the Context+Provider+Hook
-  pattern (see STATE MANAGEMENT PATTERN below).
+- `theme/`, `project/`, `workspace/`, `settings/` — cross-cutting
+  frontend state (Theme Manager, active-project state, workspace/
+  session persistence, and Sprint 9's editor settings respectively),
+  each following the Context+Provider+Hook pattern (see STATE
+  MANAGEMENT PATTERN below) — except `settings/editorSettings.ts`,
+  which is a plain `localStorage`-backed module with a pub-sub
+  listener rather than a Context, since it has no component-tree
+  scoping need (see MONACO CODE EDITOR below).
 
 Rule: components read data through props or hooks only. No component
 may import Node/Python/filesystem APIs directly — that always goes
@@ -117,18 +127,21 @@ Three processes, already implemented and hardened in Sprint 2:
 ## IPC Boundary (locked decision)
 
 All renderer → native calls go through `window.nemi`
-(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 7
+(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 9
 this surface has four namespaces: `windowControls` (Sprint 2),
 `backend` (Sprint 4: `health()`; Sprint 5: `logs()`), `fs`
 (Sprint 5: project/file CRUD + change notifications; Sprint 7:
-`selectDirectory()`, `createDirectory()`), and `projects` (Sprint 7:
-`listRecent()`, `recordOpened()`, `remove()`). Future database or
-AI-agent triggers must be added here first, as a typed method, before
-any component may call them. A component must never assume Node.js
-globals exist. All ambient types shared across `window.nemi` methods
-(`ExplorerEntry`, `LogEntry`, `BackendHealth`, `ProjectRecord`, etc.)
-live inside the `declare global` block of `electron-api.d.ts` so
-they're usable anywhere in the renderer without imports.
+`selectDirectory()`, `createDirectory()`; Sprint 9: `listAllFiles()`
+for Quick Open, `searchInFiles()` for Global Search — same ownership
+as the rest of `fs`, see FILESYSTEM OWNERSHIP below), and `projects`
+(Sprint 7: `listRecent()`, `recordOpened()`, `remove()`). Future
+database or AI-agent triggers must be added here first, as a typed
+method, before any component may call them. A component must never
+assume Node.js globals exist. All ambient types shared across
+`window.nemi` methods (`ExplorerEntry`, `LogEntry`, `BackendHealth`,
+`ProjectRecord`, `SearchMatch`, `SearchOptions`, etc.) live inside the
+`declare global` block of `electron-api.d.ts` so they're usable
+anywhere in the renderer without imports.
 
 The renderer never talks to the backend HTTP API directly — it has no
 network access to it, and the CSP's `connect-src 'self'` intentionally
@@ -358,16 +371,17 @@ edge case — but a native crash is severe enough to defend against
 regardless of how rarely it's hit.
 
 **File size guard**: `readFile()` rejects files over 2 MB with a
-clear error rather than reading an arbitrarily large file into a
-renderer `<textarea>` — a deliberate, honest limitation (no chunked
-loading or virtualized editor exists yet), not a silent failure.
+clear error rather than reading an arbitrarily large file into the
+editor — a deliberate, honest limitation, not a silent failure. This
+remains the defined boundary of "large file" support as of Sprint 9:
+Monaco's own virtualized rendering handles files up to that size
+responsively (verified with a ~1.3MB file), but true unbounded
+large-file support is not attempted or promised.
 
-**Editor scope (deliberately minimal)**: `FileEditor.tsx` is a plain
-`<textarea>` with dirty-tracking and Ctrl+S — no syntax highlighting,
-no language server, no diffing. A real code-editor experience
-(Monaco/CodeMirror) is out of scope for this sprint; this component
-exists only to make "Open" and "Save" genuinely work end-to-end
-without fabricating capability the app doesn't have.
+**Editor scope**: as of Sprint 9, `MonacoEditorPane.tsx` (see MONACO
+CODE EDITOR below) replaces the Sprint 5 plain-`<textarea>`
+`FileEditor.tsx` with full Monaco-based multi-tab editing, syntax
+highlighting, and the rest of the feature set documented there.
 
 ---
 
@@ -395,14 +409,17 @@ Workspace Manager switch, and launch-time session restore — through
 one internal `openAndRecord()` helper, so recording happens exactly
 once per open rather than being duplicated at each call site.
 
-**Workspace state = active project + the one open file** (matches
-`FileEditor.tsx`'s existing single-file scope — no editor tabs).
+**Workspace state = active project + open editor state** (as of
+Sprint 7 this was a single `openFilePath`, matching `FileEditor.tsx`'s
+then-single-file scope; Sprint 9's Monaco editor grew this into the
+full tab/group/split model described in MONACO CODE EDITOR below —
+same module, same persistence principle, more structure).
 Window chrome (sidebar/logger visibility) is deliberately not part of
 persisted workspace state. A new `frontend/src/workspace/` module
 (`workspace-context.ts` / `WorkspaceProvider.tsx` / `useWorkspace.ts`,
-the same three-file pattern as `theme/` and `project/`) owns
-`openFilePath` and auto-saves it to `localStorage` under a
-**per-project-scoped key** (`nemi.workspace.openFile.<projectPath>`) —
+the same three-file pattern as `theme/` and `project/`) owns this
+editor state and auto-saves it to `localStorage` under a
+**per-project-scoped key** (`nemi.workspace.tabs.<projectPath>`) —
 scoping by project, rather than one global slot, is what makes
 switching projects in the Workspace Manager restore each project's own
 last-open file instead of clobbering it. `WorkspaceProvider` consumes
@@ -442,13 +459,15 @@ state.
 
 ---
 
-# AI CHAT PANEL & CODE EDITOR (reserved — Sprint 6, not implemented)
+# AI CHAT PANEL (reserved — Sprint 6, not implemented)
 
 This is a documentation-only reservation prepared during Sprint 6's
 stabilization work, so a future sprint has a locked starting point
 instead of an open decision. No code, folders, or IPC channels from
 this section exist yet — writing them without a use case would violate
-`agents/architect.md`'s "never create temporary solutions."
+`agents/architect.md`'s "never create temporary solutions." The Code
+Editor half of this original reservation was resolved in Sprint 9 (see
+MONACO CODE EDITOR below); only the AI Chat Panel remains reserved.
 
 **AI Chat Panel**
 
@@ -470,15 +489,130 @@ this section exist yet — writing them without a use case would violate
   and their credentials live in `backend/app`, never the renderer —
   already locked in Sprint 4, unaffected by this reservation.
 
-**Code Editor**
+---
 
-- `FileEditor.tsx`'s plain-`<textarea>` scope was already documented
-  as a deliberate simplification in Sprint 5 (see FILESYSTEM
-  OWNERSHIP above). The upgrade path is to replace its internals with
-  Monaco or CodeMirror while keeping the same external contract it
-  already has — the `onOpenFile(path)` prop from `AppShell.tsx` and
-  `window.nemi.fs.readFile`/`writeFile` — so adopting a real editor
-  is an internal swap, not a renderer-wide API change.
+# MONACO CODE EDITOR (locked decision — Sprint 9)
+
+Resolves the Code Editor half of Sprint 6's AI CHAT PANEL & CODE
+EDITOR reservation. `FileEditor.tsx`'s plain `<textarea>` (a
+deliberate Sprint 5 simplification) is replaced by a full
+Monaco-based multi-tab editor: `frontend/src/components/editor/`.
+
+**Packaging: `monaco-editor` directly, not `@monaco-editor/react`.**
+The React wrapper defaults to loading Monaco from a CDN, which would
+violate MASTER_SPECIFICATION's Offline First requirement. Instead,
+`vite-plugin-monaco-editor-esm` (`frontend/vite.config.ts`) bundles
+Monaco's web workers locally, output to `dist/monacoeditorwork/` —
+never fetched from a CDN. `monaco-editor` is pinned at `0.50.0`: newer
+versions' `package.json` exports map double-prefixes paths when
+combined with this plugin's hardcoded worker entry points (see Sprint
+9 report for the exact failure).
+
+**Scoped imports, not `import * as monaco`.** `monacoSetup.ts` imports
+the editor core (`editor.all.js` + `editor.api`) plus exactly the
+required languages — importing the whole package pulls in every
+language Monaco ships (abap, sql, ruby, dozens more), tripling the
+bundle size. `monacoSetup.ts` is only ever reached via a dynamic
+`import()` from `MonacoEditorPane.tsx`, never a static top-level
+import, so Monaco's multi-MB bundle is code-split out of the initial
+app load and only fetched once a file is actually opened.
+
+**Every full-language-service pair needs both its `basic-languages`
+and `language/*` import — a real bug found and fixed during Sprint 9
+verification.** JSON's `language/json/monaco.contribution` calls
+`monaco.languages.register()` itself, but CSS/HTML/TypeScript's
+`language/*` contributions do not — they only wire up the *rich* side
+(worker, diagnostics, completions) via
+`monaco.languages.onLanguage(id, ...)`, which only fires once the
+language id has actually been registered. That registration is the
+`basic-languages/*` module's job (it supplies the Monarch tokenizer
+and calls `register`). Importing only the `language/typescript`
+half — as an initial implementation did — left `javascript`/
+`typescript` unregistered: models silently fell back to plaintext
+(a single token color, no syntax highlighting at all) and the
+TypeScript worker never even loaded, since its `onLanguage` hook
+never fired. `monacoSetup.ts` now imports both halves for every
+full-language-service pair (json/css/html/typescript); markdown/
+python/yaml/xml have no full language service in Monaco, so they use
+the `basic-languages` package alone.
+
+**Tab/split state lives in `workspace/`, not a new parallel module.**
+`workspace/` already owns "what's open" (Sprint 7). `workspace-
+context.ts` now models `EditorGroup` (`'primary' | 'secondary'`,
+each with its own tab list and active tab) and a `splitDirection`
+(`'horizontal' | 'vertical' | null`) instead of a single
+`openFilePath`. Split Editor is bounded to two groups — one active
+horizontal-or-vertical split, not VS Code's recursive nested-pane
+system (confirmed with the founder before implementation).
+
+**A shared, ref-counted model registry — not a per-group model
+map.** `frontend/src/components/editor/modelRegistry.ts` holds one
+`monaco.editor.ITextModel` per open file path, shared across both
+split groups when the same file is open in each (refined during
+implementation from the originally-planned per-group map, which would
+let the same file silently diverge into two different in-memory
+copies across a split). Reference-counted: a model is created on
+first `acquireModel()` and `.dispose()`d only once every acquiring
+pane has `releaseModel()`d it — the concrete mechanism behind "no
+unnecessary memory leaks" across repeated open/close/split cycles.
+
+**Ctrl+S/Ctrl+W read the active path from a ref, never from
+`editor.getModel()?.uri.fsPath` — a second real bug found and fixed
+during Sprint 9 verification.** Monaco's `Uri.file()`/`.fsPath` round-
+trip lowercases the Windows drive letter (a known `vscode-uri`
+behavior). The model registry's map key is the original,
+un-normalized path string, so looking a model back up via the URI's
+`fsPath` silently misses the registry on Windows and the save/close
+command returns early having done nothing — dirty state cleared
+visually inconsistent with disk. `MonacoEditorPane.tsx` now tracks
+`activePathRef` directly from `group.activeTabPath` and reads that in
+both `editor.addCommand()` handlers instead.
+
+**App-level keyboard shortcuts compare `event.code`, never
+`event.key`, for Shift-modified letter combos — a third real bug
+found and fixed during Sprint 9 verification.** A real Shift+P
+keypress reports `event.key === 'P'` (uppercase); an early version of
+`AppShell.tsx`'s handler checked `event.key === 'p'` (lowercase) for
+Ctrl+Shift+P, which therefore never matched on a real keyboard —
+only appeared to work under Playwright's `keyboard.press()`, which
+(unlike a real browser) reflects back whatever literal case you pass
+it rather than computing the true shifted character. `event.code`
+(the physical key, e.g. `'KeyP'`) is layout/shift/case-independent
+and is now used for every modified-letter shortcut in that handler.
+
+**Command Palette (Ctrl+Shift+P) is a small custom registry, not a
+Monaco feature.** `frontend/src/commands/` — a flat
+`Map<id, {label, run, keybinding?}>` plus a `useCommand()` hook for
+registration-on-mount, and `fuzzyMatch.ts` (subsequence matching,
+shared with Quick Open). Deliberately not VS Code's extension-
+contribution system.
+
+**Quick Open (Ctrl+P) and Global Search (Ctrl+Shift+F) are new
+Electron-main filesystem capabilities**, added to `filesystem.ts`
+alongside the existing CRUD functions — same ownership as FILESYSTEM
+OWNERSHIP below. `listAllFiles()`/`searchInFiles()` share a
+`walkFiles()` recursive walker with the existing `IGNORED_NAMES` set,
+capped (`MAX_LIST_ALL_FILES` = 5000, `MAX_SEARCH_RESULTS` = 500) so an
+unusually large repository can't hang either feature; `searchInFiles`
+skips files over the same size guard `readFile()` already uses.
+
+**Auto Save is an opt-in Settings toggle, off by default** — matches
+VS Code's own default and keeps Ctrl+S meaningful either way.
+Persisted via `frontend/src/settings/editorSettings.ts` (the same
+`localStorage` pattern `ThemeProvider` established), debounced ~1s
+after the last keystroke.
+
+**Session restore extends the existing per-project-scoped
+`localStorage` key** (Sprint 7) to store the tab/group/split
+*structure* — paths, active tab, split direction — never file
+content, same unchanged principle.
+
+**Scope explicitly excluded**, stated up front rather than discovered
+late: VS Code's "preview tab" behavior (single-click-to-preview,
+double-click-to-pin — every opened file becomes a permanent tab
+here); a native right-click context menu for tabs (Close/Close Others
+are plain buttons/Command Palette entries instead); closed-tab history
+does not survive an app relaunch (in-memory stack only, capped at 20).
 
 ---
 
@@ -560,6 +694,21 @@ must never run with Node.js integration in the renderer.
     app data, replacing the Alpha build's incidental behavior of
     writing inside `resourcesPath`. Dev mode is unaffected; both env
     vars were already-supported overrides in `config.py` since Sprint 4.
+18. **(Sprint 9)** `FileEditor.tsx`'s plain `<textarea>` is replaced by
+    Monaco (see MONACO CODE EDITOR above), resolving the Code Editor
+    half of Sprint 6's reservation — the AI Chat Panel half remains
+    reserved, not built.
+19. **(Sprint 9)** Split Editor is bounded to two groups (one active
+    horizontal-or-vertical split), not VS Code's recursive nested-pane
+    system — confirmed with the founder before implementation.
+20. **(Sprint 9)** Quick Open and Global Search's file-listing/search
+    capabilities live in Electron main (`filesystem.ts`), matching the
+    Sprint 5 FILESYSTEM OWNERSHIP decision — not the Python backend.
+21. **(Sprint 9)** App-level keyboard shortcuts compare `event.code`,
+    never `event.key`, for Shift-modified letter combos — `event.key`
+    case depends on whether Shift was actually applied by the browser,
+    which real keypresses and synthetic test input do not always agree
+    on; `event.code` is layout/shift/case-independent.
 
 ---
 

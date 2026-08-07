@@ -13,12 +13,15 @@ import {
   createDirectory,
   createFile,
   deleteEntry,
+  listAllFiles,
   listDirectory,
   openProject,
   readFile,
   renameEntry,
+  searchInFiles,
   setChangeListener,
   writeFile,
+  type SearchOptions,
 } from './filesystem';
 import { selectDirectory, selectProjectFolder } from './project-dialogs';
 
@@ -123,6 +126,12 @@ ipcMain.handle('fs:rename-entry', (_event, entryPath: string, newName: string) =
   renameEntry(entryPath, newName),
 );
 ipcMain.handle('fs:delete-entry', (_event, entryPath: string) => deleteEntry(entryPath));
+ipcMain.handle('fs:list-all-files', (_event, rootPath: string) => listAllFiles(rootPath));
+ipcMain.handle(
+  'fs:search-in-files',
+  (_event, rootPath: string, query: string, options?: SearchOptions) =>
+    searchInFiles(rootPath, query, options),
+);
 
 ipcMain.handle('projects:list-recent', (_event, limit?: number) => fetchRecentProjects(limit));
 ipcMain.handle(

@@ -1,7 +1,7 @@
-import { FolderKanban, FolderTree, Settings } from 'lucide-react';
+import { FolderKanban, FolderTree, Search, Settings } from 'lucide-react';
 import { IconButton } from '../common/IconButton';
 
-export type SidebarPanel = 'explorer' | 'workspace';
+export type SidebarPanel = 'explorer' | 'workspace' | 'search';
 
 interface SidebarProps {
   activePanel: SidebarPanel;
@@ -26,6 +26,13 @@ export function Sidebar({ activePanel, onSelectPanel, onOpenSettings }: SidebarP
           onClick={() => onSelectPanel('workspace')}
         >
           <FolderKanban size={18} />
+        </IconButton>
+        <IconButton
+          label="Search"
+          active={activePanel === 'search'}
+          onClick={() => onSelectPanel('search')}
+        >
+          <Search size={18} />
         </IconButton>
       </div>
       <IconButton label="Settings" onClick={onOpenSettings}>

@@ -1,7 +1,13 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { useTheme } from '../../theme/useTheme';
 import { IconButton } from '../common/IconButton';
+import {
+  getAutoSaveEnabled,
+  getWordWrapEnabled,
+  setAutoSaveEnabled,
+  setWordWrapEnabled,
+} from '../../settings/editorSettings';
 
 interface SettingsModalProps {
   onClose: () => void;
@@ -9,6 +15,8 @@ interface SettingsModalProps {
 
 export function SettingsModal({ onClose }: SettingsModalProps) {
   const { theme, setTheme } = useTheme();
+  const [autoSave, setAutoSave] = useState(getAutoSaveEnabled);
+  const [wordWrap, setWordWrap] = useState(getWordWrapEnabled);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -63,6 +71,35 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
               >
                 Light
               </button>
+            </div>
+          </div>
+          <div>
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-fg-muted">
+              Editor
+            </h3>
+            <div className="space-y-2">
+              <label className="flex items-center justify-between text-sm text-fg">
+                Auto Save
+                <input
+                  type="checkbox"
+                  checked={autoSave}
+                  onChange={(event) => {
+                    setAutoSave(event.target.checked);
+                    setAutoSaveEnabled(event.target.checked);
+                  }}
+                />
+              </label>
+              <label className="flex items-center justify-between text-sm text-fg">
+                Word Wrap
+                <input
+                  type="checkbox"
+                  checked={wordWrap}
+                  onChange={(event) => {
+                    setWordWrap(event.target.checked);
+                    setWordWrapEnabled(event.target.checked);
+                  }}
+                />
+              </label>
             </div>
           </div>
           <div>

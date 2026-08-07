@@ -3,6 +3,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import electron from 'vite-plugin-electron/simple';
+import monacoEditorEsmPlugin from 'vite-plugin-monaco-editor-esm';
 
 // When this dev server is started from a process that is itself an Electron
 // app running in "run as Node" mode (e.g. VS Code's extension host, which
@@ -21,6 +22,11 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    // Bundles Monaco's web workers locally (Sprint 9) — never from a CDN,
+    // per MASTER_SPECIFICATION's Offline First requirement.
+    monacoEditorEsmPlugin({
+      languageWorkers: ['editorWorkerService', 'css', 'html', 'json', 'typescript'],
+    }),
     electron({
       main: {
         entry: 'electron/main.ts',

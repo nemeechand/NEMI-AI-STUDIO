@@ -30,6 +30,18 @@ declare global {
     type: ExplorerEntryType;
   }
 
+  interface SearchMatch {
+    path: string;
+    line: number;
+    column: number;
+    lineText: string;
+  }
+
+  interface SearchOptions {
+    caseSensitive?: boolean;
+    useRegex?: boolean;
+  }
+
   interface ProjectRecord {
     id: string;
     name: string;
@@ -65,6 +77,12 @@ declare global {
         createDirectory: (parentPath: string, name: string) => Promise<string>;
         renameEntry: (entryPath: string, newName: string) => Promise<string>;
         deleteEntry: (entryPath: string) => Promise<void>;
+        listAllFiles: (rootPath: string) => Promise<string[]>;
+        searchInFiles: (
+          rootPath: string,
+          query: string,
+          options?: SearchOptions,
+        ) => Promise<SearchMatch[]>;
         onChange: (callback: (event: { path: string }) => void) => () => void;
       };
       projects: {

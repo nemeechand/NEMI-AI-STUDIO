@@ -350,7 +350,25 @@ Verified: tsc build, eslint (0 warnings), prettier (clean), vite build; pytest (
 
 Known limitation: no true clean-machine/VM test was performed — this development machine has multiple Python installations already present, so PATH-stripping is the closest practical proxy available here, not a substitute for genuine clean-Windows verification, documented honestly rather than overclaimed. Installer remains unsigned (separate Beta blocker, unchanged, out of scope this sprint) — unsigned PyInstaller executables are somewhat more prone to AV/SmartScreen false positives, compounding that existing limitation
 
-Sprint 9 — Pending Approval
+Sprint 9 — Completed (Professional Monaco Code Editor)
+
+Goal:
+
+Replace the plain-`<textarea>` editor with a real, VS Code-class Monaco-based editing experience: multi-tab editing, dirty indicators, auto save, manual save (Ctrl+S), Save All, Close/Close Others/Reopen Closed Tab, bounded Split Editor (horizontal + vertical, two groups), minimap, line numbers, code folding, word wrap, syntax highlighting, bracket matching, auto indentation, undo/redo, multi-cursor, find/replace, Quick Open (Ctrl+P), Global Search (Ctrl+Shift+F), and Command Palette (Ctrl+Shift+P) — for JavaScript, TypeScript, HTML, CSS, JSON, Markdown, Python, YAML, and XML — without breaking Sprints 1–8 or changing the Sprint 8 packaging architecture.
+
+Scope decision (confirmed with founder before implementation): Split Editor is bounded to two groups (one active horizontal-or-vertical split), not VS Code's full recursive nested-pane system.
+
+Delivered:
+
+`monaco-editor` (pinned `0.50.0`, not `@monaco-editor/react` — the wrapper defaults to a CDN, which would violate Offline First) bundled locally via `vite-plugin-monaco-editor-esm`; scoped imports (`editor.all.js` + per-language contributions, not `import * as monaco`) reached only through a dynamic `import()` from `MonacoEditorPane.tsx` so Monaco's multi-MB bundle stays code-split out of the initial app load. `workspace-context.ts`/`WorkspaceProvider.tsx` extended from a single `openFilePath` into `EditorGroup`/`EditorTab`/`splitDirection` state (tabs, active tab, close/close-others, an in-memory reopen-closed-tab stack, split/unsplit, Save All via a per-group save-handler registry). New `frontend/src/components/editor/` (`MonacoEditorPane.tsx`, `TabStrip.tsx`, `monacoSetup.ts`, `languageForPath.ts`, `modelRegistry.ts` — a shared, ref-counted model registry so the same file open in both split groups never silently diverges, refined during implementation from the originally-planned per-group model map), `frontend/src/commands/` (Command Palette registry + `useCommand()` + fuzzy matching), and `components/search/GlobalSearch.tsx` (new third Sidebar panel). `filesystem.ts` gained `listAllFiles()`/`searchInFiles()` (new `fs:list-all-files`/`fs:search-in-files` IPC) for Quick Open/Global Search, same Electron-main ownership as the rest of `fs`. Auto Save added as an opt-in Settings toggle (off by default, ~1s debounce).
+
+Found and fixed three real bugs during live verification (not scope creep — direct blockers of this sprint's own acceptance criteria): (1) `monacoSetup.ts` initially imported only the rich `language/typescript`/`css`/`html` contributions, omitting their `basic-languages` counterpart — those rich contributions only wire up worker/diagnostics via `onLanguage()`, which never fires until the `basic-languages` half actually registers the language id, so JS/TS/CSS/HTML silently rendered with zero syntax highlighting and the TypeScript worker never even loaded; fixed by importing both halves for every full-language-service pair. (2) `editor.addCommand()`'s Ctrl+S/Ctrl+W handlers read the active file path via `editor.getModel()?.uri.fsPath`, but Monaco's `Uri.file()`/`.fsPath` round-trip lowercases the Windows drive letter, silently missing the model registry's original-case map key and making save/close no-ops on Windows; fixed by tracking the active path in a ref instead. (3) `AppShell.tsx`'s Ctrl+Shift+P/Ctrl+Shift+F handlers compared `event.key` case-sensitively against a lowercase/uppercase literal, but a real Shift+letter keypress reports an uppercase `event.key` — the lowercase Command Palette check therefore never matched on a real keyboard (it only appeared to work under Playwright's non-standard key-echo behavior); fixed by comparing `event.code` (layout/case-independent) for every modified-letter shortcut.
+
+docs/ARCHITECTURE.md gained a new "MONACO CODE EDITOR (locked — Sprint 9)" section (resolving the Code Editor half of Sprint 6's reservation — the AI Chat Panel half remains reserved), the IPC namespace list and Presentation Layer component list updated, four new locked-decision entries; docs/SPRINT_9_REPORT.md created.
+
+Verified: tsc build, eslint (0 warnings), prettier (clean, `release/` added to `.prettierignore`), vite build; pytest (24 passed, unchanged — no backend changes), ruff check (all checks passed), mypy strict (0 issues, 26 source files). Live Playwright verification across four suites, each reproduced clean on two consecutive fully-reset runs: a 16-point core suite (tabs, split, save, undo/redo, dialogs, per-language tokenization spot checks); a 17-point extended suite (all 9 required languages' syntax highlighting, Auto Save writing to disk without Ctrl+S, Global Search find+open, a ~1.3MB large file staying responsive, session restore surviving reload with an active split and multiple tabs intact); a 10-point full Sprint 1–8 regression with the real dev backend running (StatusBar tooltip, Logger backend-sourced rows, Explorer expand, Workspace Manager, zero IPC failures); and a 5-point spot-check of a freshly built `npm run dist:win` packaged app (bundled PyInstaller backend healthy, Monaco opens files, TypeScript highlighting, Ctrl+S save) confirming Sprint 8's packaging architecture is genuinely unaffected, not just unmodified in source.
+
+Known limitation: Monaco renders through its own internal canvas-backed event handling, so a few interaction classes (precise multi-cursor via Alt+Click, drag-based UI) were verified through Monaco's own API/model state rather than synthetic pixel-level DOM events — consistent with this project's practice of stating verification boundaries honestly. AI Chat Panel remains architecture-only (Sprint 6 reservation, not built). Code-signing certificate for the installer remains the top Beta blocker, unaffected by this sprint.
 
 ---
 
@@ -518,11 +536,19 @@ Sprint 1 Completed
 
 ✔ Sprint 8 Verified (tsc, eslint, prettier, vite build; pytest ×24 unchanged, ruff, mypy strict; full `npm run dist:win` packaged build; 15-point live verification passed 15/15, reproduced twice)
 
+✔ Sprint 9 Completed — Professional Monaco Code Editor
+
+✔ Plain `<textarea>` Editor Replaced by Monaco (bundled locally, `monaco-editor` 0.50.0, scoped + lazy-loaded imports) — multi-tab editing, dirty indicators, Save All, Close/Close Others/Reopen Closed Tab, bounded Split Editor (2 groups), minimap, folding, word wrap, bracket matching, undo/redo, multi-cursor, Find/Replace, Quick Open (Ctrl+P), Global Search (Ctrl+Shift+F), Command Palette (Ctrl+Shift+P), Auto Save toggle, and syntax highlighting for all 9 required languages
+
+✔ Found and Fixed Three Real Bugs During Live Verification — missing `basic-languages` imports left JS/TS/CSS/HTML with zero syntax highlighting and a dead TypeScript worker; Ctrl+S/Ctrl+W silently no-op'd on Windows due to Monaco's URI drive-letter lowercasing; Ctrl+Shift+P/Ctrl+Shift+F never matched a real keypress due to case-sensitive `event.key` checks (fixed via `event.code`)
+
+✔ Sprint 9 Verified (tsc, eslint, prettier, vite build; pytest ×24 unchanged, ruff, mypy strict; 4 live Playwright suites — 16-point core, 17-point extended, 10-point Sprint 1–8 regression, 5-point packaged-app spot-check — each reproduced clean twice)
+
 ---
 
 # PENDING TASKS
 
-Code-signing certificate for the installer (currently unsigned) — top remaining Beta blocker now that standalone runtime bundling is done (Sprint 8)
+Code-signing certificate for the installer (currently unsigned) — top remaining Beta blocker, unaffected by Sprint 9
 
 Workflow Design
 
@@ -540,9 +566,7 @@ Repositories/business logic for the remaining 6 tables (tasks, files, agents, me
 
 Resizable/drag panel splitters (sidebar and logger panel are currently show/hide toggles only)
 
-FileEditor is a plain textarea by design (no syntax highlighting/language server) — a real code-editor experience (Monaco/CodeMirror) is future work
-
-AI Chat Panel and Code Editor: locations/patterns reserved in `docs/ARCHITECTURE.md` (Sprint 6) but not yet implemented — no `components/chat/`, `ai/`, `window.nemi.ai.*`, or Monaco/CodeMirror integration exists yet
+AI Chat Panel: location/pattern reserved in `docs/ARCHITECTURE.md` (Sprint 6) but not yet implemented — no `components/chat/`, `ai/`, or `window.nemi.ai.*` exists yet. The Code Editor half of that same reservation was resolved in Sprint 9 (Monaco)
 
 ---
 
@@ -702,15 +726,17 @@ Sprint 7 Completed — Workspace & Project Management System: `projects` table r
 
 Sprint 8 Completed — Standalone Python Runtime Bundling: backend bundled via PyInstaller (onedir, checked-in `.spec` file); packaged builds spawn the bundled executable directly with zero `PATH`/system-Python dependency (verified with `PATH` stripped of every Python install and via live process inspection); fixed a frozen-executable path-resolution issue found during implementation by always passing `NEMI_DB_PATH`/`NEMI_LOG_FILE` from `app.getPath('userData')` when packaged; `dist:win` pipeline and `extraResources` updated accordingly — verified via a full packaged build plus a 15-point live suite, reproduced clean twice
 
+Sprint 9 Completed — Professional Monaco Code Editor: `FileEditor.tsx`'s plain `<textarea>` replaced by a full Monaco-based multi-tab editor (bundled locally, scoped + lazy-loaded imports, offline-first) — tabs, dirty indicators, Save All, Close/Close Others/Reopen Closed Tab, bounded Split Editor (2 groups), Quick Open, Global Search, Command Palette, Auto Save toggle, and syntax highlighting for all 9 required languages; found and fixed three real bugs during live verification (missing `basic-languages` imports killed JS/TS/CSS/HTML highlighting and the TS worker, Windows URI drive-letter lowercasing broke Ctrl+S/Ctrl+W, case-sensitive `event.key` checks broke Ctrl+Shift+P/F on a real keyboard) — verified via 4 live Playwright suites (core, extended, Sprint 1–8 regression, packaged-app spot-check) plus the full offline suite, each live suite reproduced clean twice; resolves the Code Editor half of Sprint 6's AI Chat Panel & Code Editor reservation
+
 ---
 
 # NEXT MILESTONE
 
-Sprint 9
+Sprint 10
 
-Code-signing certificate for the installer — now the top remaining Beta blocker with standalone runtime bundling done (Sprint 8)
+Code-signing certificate for the installer — still the top remaining Beta blocker, unaffected by Sprint 9
 
-AI Chat Panel and Code Editor implementation — architecture reserved in Sprint 6 (`docs/ARCHITECTURE.md`), ready to build against
+AI Chat Panel implementation — architecture reserved in Sprint 6 (`docs/ARCHITECTURE.md`), ready to build against; the Code Editor half of that same reservation was resolved in Sprint 9 (Monaco)
 
 True concurrent multi-project support (simultaneous open projects, not just switching) — deliberately deferred in Sprint 7; would require a per-project filesystem watcher map and a multi-root Explorer UI
 

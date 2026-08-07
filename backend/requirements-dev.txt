@@ -2,3 +2,9 @@ ruff>=0.6
 mypy>=1.11
 pytest>=8.3
 httpx>=0.27
+
+# Build-time only (Sprint 8): bundles the backend into a standalone
+# executable for packaged/distributed builds. Never imported by app code,
+# never a runtime dependency — same treatment as Pillow was for the Alpha
+# build's one-time icon generation.
+pyinstaller>=6.10

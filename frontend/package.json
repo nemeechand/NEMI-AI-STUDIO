@@ -8,10 +8,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:backend": "cd ../backend && python -m PyInstaller nemi-backend.spec --distpath dist-pyinstaller --workpath build-pyinstaller --noconfirm",
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "dist:win": "npm run build && electron-builder --win nsis portable"
+    "dist:win": "npm run build && npm run build:backend && electron-builder --win nsis portable"
   },
   "dependencies": {
     "chokidar": "^4.0.3",
@@ -55,15 +56,9 @@
     ],
     "extraResources": [
       {
-        "from": "../backend",
+        "from": "../backend/dist-pyinstaller/nemi-backend",
         "to": "backend",
-        "filter": [
-          "app/**/*",
-          "requirements.txt",
-          "pyproject.toml",
-          "!**/__pycache__",
-          "!**/*.pyc"
-        ]
+        "filter": ["**/*"]
       }
     ],
     "win": {

@@ -44,6 +44,14 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# ...except NEMI AI STUDIO's own backend build spec (Sprint 8), which is
+# deliberately checked in and version-controlled — see docs/ARCHITECTURE.md.
+!backend/nemi-backend.spec
+
+# NEMI AI STUDIO PyInstaller build output (generated, same treatment as
+# dist/dist-electron/release above)
+backend/dist-pyinstaller/
+backend/build-pyinstaller/
 
 # Installer logs
 pip-log.txt

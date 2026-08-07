@@ -324,7 +324,33 @@ Verified: tsc build, eslint (0 warnings), prettier (clean), vite build (renderer
 
 Known limitation (unchanged from Sprint 6, not addressed this sprint): still requires Python 3.11+ pre-installed; installer unsigned; AI Chat Panel/Code Editor remain architecture-only (Sprint 6 reservation, not built)
 
-Sprint 8 — Pending Approval
+Sprint 8 — Completed (Standalone Python Runtime Bundling)
+
+Goal:
+
+Bundle a standalone Python runtime into the packaged app (PyInstaller or equivalent) so it runs with zero prerequisites — the top Beta blocker flagged since the Alpha build. Chosen by the founder from three candidates (the others: AI Chat Panel, Code Editor upgrade). Code-signing explicitly out of scope (separate, already-tracked Beta blocker).
+
+Delivered:
+
+Backend bundled via PyInstaller (`backend/nemi-backend.spec`, checked in and version-controlled — not ad-hoc CLI flags), onedir output (not onefile — Electron spawns the backend fresh on every app launch, and onefile's self-extraction would add latency to every single startup; onedir has none). `pyinstaller` added to `backend/requirements-dev.txt` as a build-time-only tool, same treatment Pillow got for the Alpha build's icon generation — never a runtime dependency
+
+Found and fixed a real architectural issue during implementation: `backend/app/core/config.py`'s `_REPO_ROOT` path derivation (`Path(__file__).resolve().parents[3]`) breaks under a frozen executable — verified directly by launching the bundled exe standalone and watching it write `database/nemi.db` inside its own bundle folder instead of the real repo root. Fixed without any backend source change: `frontend/electron/backend-process.ts::startBackend()` now always sets `NEMI_DB_PATH`/`NEMI_LOG_FILE` (both already-supported overrides in `config.py` since Sprint 4) from `app.getPath('userData')` when packaged — the correct, conventional per-user app-data location, also fixing an incidental Alpha-build behavior of writing inside `resourcesPath`. Dev mode untouched
+
+`backend-process.ts::resolveBackendCommand()` branches on `app.isPackaged` (mirroring the existing `resolveBackendDir()` pattern) — packaged builds spawn `nemi-backend.exe` directly with no args and no `PATH` dependency; dev mode remains `python -m app.main` from `PATH`, completely unchanged. The ENOENT error message now also branches: a missing bundled exe in a packaged build reports a corrupted-install message, not the old "install Python" message that would no longer be accurate
+
+`frontend/package.json`: new `build:backend` script wired into `dist:win` before `electron-builder` runs; `extraResources` repointed from raw Python source to the PyInstaller onedir output — a packaged app no longer ships source requiring a system interpreter
+
+Rigorously verified zero dependency on system Python: launched the bundled exe with `PATH` stripped of every Python installation on the dev machine (`python`/`python3`/`py` all confirmed unresolvable) — `/health`, `/logs`, and `/projects` all still worked correctly. Launched the full packaged app and confirmed via live process inspection (`Get-CimInstance Win32_Process`) that the actual running backend process is `nemi-backend.exe`, not `python.exe`. A 15-point Playwright-driven live verification (fresh Electron profile) covering backend/StatusBar/Logger/health plus the two Sprint-8-specific proofs (bundled-exe process identity, correct userData DB location) plus a Sprint 7 regression pass (Explorer, file CRUD, Workspace Manager) passed 15/15, reproduced clean on two consecutive runs
+
+Also fixed a pre-existing `.gitignore` bug found while adding build-artifact ignores: the generic Python template's `*.spec` rule was silently swallowing the deliberately-checked-in `nemi-backend.spec` — added a negation exception
+
+docs/ARCHITECTURE.md updated continuously: new STANDALONE RUNTIME BUNDLING section, Process Lifecycle bullet corrected (also fixed an unrelated stale line from Sprint 6 found in passing — stdout/stderr Logger Panel relay was already built, the doc still said "future work"), 2 new locked decisions
+
+Verified: tsc build, eslint (0 warnings), prettier (clean), vite build; pytest (24 passed, unchanged — backend source untouched), ruff check (all checks passed), mypy strict (0 issues, 26 source files); full `npm run dist:win` packaged build succeeded (installer + portable, ~96MB, up from ~80MB — expected growth, not a defect); 15-point live verification passed 15/15 twice
+
+Known limitation: no true clean-machine/VM test was performed — this development machine has multiple Python installations already present, so PATH-stripping is the closest practical proxy available here, not a substitute for genuine clean-Windows verification, documented honestly rather than overclaimed. Installer remains unsigned (separate Beta blocker, unchanged, out of scope this sprint) — unsigned PyInstaller executables are somewhat more prone to AV/SmartScreen false positives, compounding that existing limitation
+
+Sprint 9 — Pending Approval
 
 ---
 
@@ -480,13 +506,23 @@ Sprint 1 Completed
 
 ✔ Sprint 7 Verified (tsc, eslint, prettier, vite build; pytest ×24 [10 new], ruff, mypy strict; 25-point Playwright-driven live verification — Sprint 1–6 regression + every Sprint 7 feature incl. session restore — passed 25/25, reproduced on two consecutive clean runs)
 
+✔ Sprint 8 Completed — Standalone Python Runtime Bundling
+
+✔ Backend Bundled via PyInstaller (`backend/nemi-backend.spec`, onedir) — packaged builds no longer require a system Python interpreter
+
+✔ Fixed Frozen-Executable Path Resolution — `backend-process.ts` now always passes `NEMI_DB_PATH`/`NEMI_LOG_FILE` (from `app.getPath('userData')`) when packaged, correcting where app data lands
+
+✔ `dist:win` Pipeline + `extraResources` Updated to Ship the Bundled Executable Instead of Raw Source
+
+✔ Verified Zero System-Python Dependency (`PATH` stripped of every Python install) and Confirmed via Live Process Inspection That the Bundled Exe (Not `python.exe`) Is What Actually Runs
+
+✔ Sprint 8 Verified (tsc, eslint, prettier, vite build; pytest ×24 unchanged, ruff, mypy strict; full `npm run dist:win` packaged build; 15-point live verification passed 15/15, reproduced twice)
+
 ---
 
 # PENDING TASKS
 
-Standalone Python runtime bundling for the installer (PyInstaller or equivalent) — top priority before a Beta build
-
-Code-signing certificate for the installer (currently unsigned)
+Code-signing certificate for the installer (currently unsigned) — top remaining Beta blocker now that standalone runtime bundling is done (Sprint 8)
 
 Workflow Design
 
@@ -499,8 +535,6 @@ Git Integration
 Testing Engine
 
 Build System
-
-Python runtime bundling for packaged/distributed builds (currently assumes `python` on PATH — dev-mode only)
 
 Repositories/business logic for the remaining 6 tables (tasks, files, agents, memory, settings, history) — schema exists, repositories deferred to the sprints that need them; `projects` now has a repository (Sprint 7); `files` table remains intentionally unused (file content always comes from disk)
 
@@ -666,13 +700,15 @@ Sprint 6 Completed — Fixed the Alpha-breaking preload path bug (`window.nemi` 
 
 Sprint 7 Completed — Workspace & Project Management System: `projects` table repository implemented (`GET/POST /projects/recent|opened`, `DELETE /projects/{id}`, new `last_opened_at` column via idempotent migration); New Project Wizard (in-app modal) replaces the old native-save-dialog creation flow; Workspace Manager panel (list/switch/remove recent projects) added as a second Sidebar view; Recent Projects card added to Dashboard; workspace auto-save + restore-previous-session implemented via a new per-project-scoped `workspace/` Context+Provider+Hook module — verified via a 25-point live Playwright suite covering both full Sprint 1–6 regression and every new feature, reproduced clean twice
 
+Sprint 8 Completed — Standalone Python Runtime Bundling: backend bundled via PyInstaller (onedir, checked-in `.spec` file); packaged builds spawn the bundled executable directly with zero `PATH`/system-Python dependency (verified with `PATH` stripped of every Python install and via live process inspection); fixed a frozen-executable path-resolution issue found during implementation by always passing `NEMI_DB_PATH`/`NEMI_LOG_FILE` from `app.getPath('userData')` when packaged; `dist:win` pipeline and `extraResources` updated accordingly — verified via a full packaged build plus a 15-point live suite, reproduced clean twice
+
 ---
 
 # NEXT MILESTONE
 
-Sprint 8
+Sprint 9
 
-Standalone Python runtime bundling (PyInstaller or equivalent) for a Beta build — the packaging pipeline itself is now proven (Alpha Build 1), this is the remaining gap before the app runs with zero prerequisites
+Code-signing certificate for the installer — now the top remaining Beta blocker with standalone runtime bundling done (Sprint 8)
 
 AI Chat Panel and Code Editor implementation — architecture reserved in Sprint 6 (`docs/ARCHITECTURE.md`), ready to build against
 

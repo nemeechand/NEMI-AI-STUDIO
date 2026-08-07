@@ -1,8 +1,8 @@
 # ARCHITECTURE.md
 
-Version: 1.4
-Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7)
-Governs: Sprint 8 onward
+Version: 1.5
+Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8)
+Governs: Sprint 9 onward
 
 ---
 
@@ -183,26 +183,97 @@ needed.
 **Process lifecycle**: Electron main owns the backend's entire
 lifecycle (`frontend/electron/backend-process.ts`):
 
-- Spawned via `python -m app.main` with `cwd` set to `backend/`,
-  started right after `app.whenReady()` — in parallel with window
-  creation, not blocking it.
+- Spawned right after `app.whenReady()` — in parallel with window
+  creation, not blocking it. What gets spawned depends on
+  `app.isPackaged` (`resolveBackendCommand()`, Sprint 8): in dev mode,
+  `python -m app.main` with `cwd` set to `backend/`, from the system
+  `PATH`, unchanged since Sprint 4; in a packaged build, the bundled
+  `nemi-backend(.exe)` executable directly, no arguments, no `PATH`
+  dependency — see STANDALONE RUNTIME BUNDLING below.
 - Readiness is polled via `GET /health` (300ms interval, 15s
   timeout) from Electron main; state is one of `starting` / `ready`
   / `error` / `stopped`, exposed to the renderer via
   `window.nemi.backend.health()`.
 - Stopped via `child.kill()` on `app.on('before-quit')`. Verified
   manually in Sprint 4 that a graceful window close terminates the
-  Python child — no orphaned process.
-- stdout/stderr are piped to Electron's console today (prefixed
-  `[backend]`). Relaying them into the in-app Logger Panel is future
-  work — the Logger Panel is still mock data (Sprint 2 pending item).
+  Python child — no orphaned process; reverified in Sprint 8 against
+  the bundled executable with the same result.
+- stdout/stderr are piped to Electron's console (prefixed `[backend]`)
+  and, since Sprint 6, also relayed into the Logger Panel's `logs`
+  table via `postLog()` (`backend.stdout` at DEBUG, `backend.stderr`
+  at WARNING) — this line was stale until Sprint 8's docs pass caught
+  it; the "future work" it described was already done.
 
-**Known limitation**: spawning `python` from `PATH` assumes a
-compatible Python + the backend's dependencies are installed on the
-machine running the app. This is acceptable for development; a
-packaged/distributed build will need to bundle a Python runtime
-(e.g. PyInstaller) — tracked as a pending task, not solved this
-sprint (packaging is explicitly a later MASTER_SPECIFICATION phase).
+---
+
+# STANDALONE RUNTIME BUNDLING (locked decision — Sprint 8)
+
+**Tool: PyInstaller, onedir (not onefile).** `backend/nemi-backend.spec`
+targets `backend/app/main.py`, building `backend/dist-pyinstaller/nemi-backend/`
+(`nemi-backend.exe` + an `_internal/` folder of bundled dependencies).
+Onedir was chosen over onefile specifically because Electron spawns the
+backend fresh on every app launch (see Process lifecycle above) —
+onefile self-extracts to a temp directory on *every* run, which would
+add extraction latency to every single startup; onedir has no
+extraction step, matching how Electron itself already ships (an
+unpacked `resources` tree). `pyinstaller` lives in
+`backend/requirements-dev.txt` as a build-time-only tool — never
+imported by application code, never a runtime dependency, the same
+treatment Pillow got for the Alpha build's one-time icon generation.
+
+**Build pipeline**: `frontend/package.json`'s `dist:win` script now runs
+`npm run build:backend` (which builds the PyInstaller bundle) before
+`electron-builder` packages the app. `extraResources` was repointed
+from raw Python source (`../backend`) to the PyInstaller output
+(`../backend/dist-pyinstaller/nemi-backend`) — a packaged app no longer
+ships source that a system interpreter must execute; it ships a
+self-contained executable. Dev mode (`npm run dev`) is completely
+unaffected — it never reads `extraResources` or runs `build:backend`.
+
+**Finding during implementation — `config.py`'s path resolution breaks
+under a frozen executable.** `Settings.db_path`/`log_file_path` default
+via `Path(__file__).resolve().parents[3]`, which assumes a fixed
+directory depth below the repo root. Under a frozen PyInstaller
+executable this resolves to the bundle's own directory instead — the
+Alpha build already had a related (undocumented, low-stakes since
+Python was on `PATH` on the only machine that had run it) version of
+this problem: a packaged app's database/logs landed inside
+`resourcesPath` rather than a proper per-user data directory. Verified
+directly during this sprint: launching the bundled exe standalone (no
+Electron, no env vars set) wrote `database/nemi.db` inside its own
+bundle folder. **Fix**: `backend-process.ts::startBackend()` now
+always sets `NEMI_DB_PATH`/`NEMI_LOG_FILE` when packaged, computed
+from `app.getPath('userData')` — Electron's conventional, correct
+location for mutable per-user app data, separate from the installed
+binaries. Both env vars were already supported as overrides by
+`config.py` since Sprint 4; no backend source change was needed, only
+always-populating what was previously optional. Dev mode leaves them
+unset, so `config.py`'s existing repo-relative defaults are unchanged.
+Reverified end-to-end: the packaged app's database now lands under
+`app.getPath('userData')/database/nemi.db`, confirmed via a live
+launch with a dedicated test profile.
+
+**Verified with `PATH` stripped of every Python installation** on the
+development machine (`python`/`python3`/`py` all confirmed
+unresolvable) — the bundled exe still serves `/health` and the full
+`/logs`/`/projects` API correctly, proving no silent dependency on a
+system interpreter. Also confirmed via live process inspection
+(`Get-CimInstance Win32_Process`) that the actual running backend
+process during a full packaged-app launch is `nemi-backend.exe`, not
+`python.exe`.
+
+**Known limitations (unchanged or newly observed this sprint)**:
+- No true clean-machine/VM test was performed — this development
+  machine has multiple Python installations already present, so the
+  `PATH`-stripping test above is the closest practical proxy available
+  in this environment, not a substitute for a genuine clean-Windows
+  verification. Documented honestly rather than overclaiming.
+- Package size grew from ~80MB to ~96MB (Python interpreter + stdlib +
+  fastapi/pydantic/starlette/uvicorn) — expected, not a defect.
+- The installer remains unsigned (separate, already-tracked Beta
+  blocker, out of scope this sprint); unsigned PyInstaller executables
+  are somewhat more prone to antivirus/SmartScreen false positives
+  than a signed binary, compounding that existing limitation.
 
 ---
 
@@ -479,6 +550,16 @@ must never run with Node.js integration in the renderer.
     old native-save-dialog project-creation flow; `project-dialogs.ts`'s
     `'new'` mode was removed once superseded, not kept as dead code
     alongside it.
+16. **(Sprint 8)** Packaged builds bundle the backend via PyInstaller
+    (onedir, not onefile — see STANDALONE RUNTIME BUNDLING above) and
+    spawn it directly with no `PATH`/system-Python dependency; dev mode
+    is unchanged (`python -m app.main` from `PATH`).
+17. **(Sprint 8)** Packaged builds always pass `NEMI_DB_PATH`/
+    `NEMI_LOG_FILE` (from `app.getPath('userData')`) to the backend
+    process — the correct, conventional location for mutable per-user
+    app data, replacing the Alpha build's incidental behavior of
+    writing inside `resourcesPath`. Dev mode is unaffected; both env
+    vars were already-supported overrides in `config.py` since Sprint 4.
 
 ---
 

@@ -31,6 +31,8 @@ function resolveBackendDir(electronDirname: string): string {
   if (app.isPackaged) {
     // electron-builder ships backend/ as an extraResource (see
     // frontend/package.json "build" config), unpacked next to the app.
+    // As of Sprint 8 this holds the PyInstaller onedir bundle
+    // (nemi-backend(.exe) + _internal/), not raw Python source.
     return path.join(process.resourcesPath, 'backend');
   }
   // Dev mode: electron/main.ts compiles to frontend/dist-electron/main.js,
@@ -40,6 +42,44 @@ function resolveBackendDir(electronDirname: string): string {
 
 function resolvePythonExecutable(): string {
   return process.env.NEMI_PYTHON_PATH ?? (process.platform === 'win32' ? 'python' : 'python3');
+}
+
+interface BackendCommand {
+  command: string;
+  args: string[];
+}
+
+/**
+ * Packaged builds spawn the PyInstaller-bundled executable directly — no
+ * reliance on a system Python being installed (Sprint 8). Dev mode is
+ * unchanged: `python -m app.main` from PATH, since the whole point of
+ * bundling is only relevant to the distributed artifact.
+ */
+function resolveBackendCommand(backendDir: string): BackendCommand {
+  if (app.isPackaged) {
+    const executableName = process.platform === 'win32' ? 'nemi-backend.exe' : 'nemi-backend';
+    return { command: path.join(backendDir, executableName), args: [] };
+  }
+  return { command: resolvePythonExecutable(), args: ['-m', 'app.main'] };
+}
+
+/**
+ * Where the bundled backend should read/write its database and log file.
+ * Packaged builds point these at Electron's conventional per-user app-data
+ * directory (never inside the installed resources, which may not be
+ * writable and shouldn't hold mutable user data) — config.py already
+ * supports both env vars as overrides, so no backend code change was
+ * needed, only always-populating what was previously optional. Dev mode
+ * leaves them unset, preserving config.py's existing repo-relative
+ * defaults (database/nemi.db, logs/backend.log) exactly as before.
+ */
+function resolveDataPaths(): { dbPath?: string; logFilePath?: string } {
+  if (!app.isPackaged) return {};
+  const userDataDir = app.getPath('userData');
+  return {
+    dbPath: path.join(userDataDir, 'database', 'nemi.db'),
+    logFilePath: path.join(userDataDir, 'logs', 'backend.log'),
+  };
 }
 
 async function waitForHealthy(timeoutMs: number): Promise<void> {
@@ -97,12 +137,16 @@ export function startBackend(electronDirname: string): void {
   lastError = undefined;
 
   const cwd = resolveBackendDir(electronDirname);
-  const proc = spawn(resolvePythonExecutable(), ['-m', 'app.main'], {
+  const { command, args } = resolveBackendCommand(cwd);
+  const { dbPath, logFilePath } = resolveDataPaths();
+  const proc = spawn(command, args, {
     cwd,
     env: {
       ...process.env,
       NEMI_BACKEND_HOST: BACKEND_HOST,
       NEMI_BACKEND_PORT: String(BACKEND_PORT),
+      ...(dbPath ? { NEMI_DB_PATH: dbPath } : {}),
+      ...(logFilePath ? { NEMI_LOG_FILE: logFilePath } : {}),
     },
   });
   child = proc;
@@ -118,11 +162,19 @@ export function startBackend(electronDirname: string): void {
 
   proc.on('error', (error: NodeJS.ErrnoException) => {
     state = 'error';
-    lastError =
-      error.code === 'ENOENT'
-        ? 'Python was not found on this system. Install Python 3.11+ and the ' +
-          'backend dependencies (see backend/requirements.txt) to enable AI Studio.'
-        : error.message;
+    if (error.code !== 'ENOENT') {
+      lastError = error.message;
+    } else if (app.isPackaged) {
+      // The bundled executable should always be present (Sprint 8) — ENOENT
+      // here means a packaging defect, not a missing user prerequisite.
+      lastError =
+        'The bundled backend was not found. This installation may be corrupted; ' +
+        'try reinstalling NEMI AI STUDIO.';
+    } else {
+      lastError =
+        'Python was not found on this system. Install Python 3.11+ and the ' +
+        'backend dependencies (see backend/requirements.txt) to enable AI Studio.';
+    }
   });
 
   proc.on('exit', (code) => {

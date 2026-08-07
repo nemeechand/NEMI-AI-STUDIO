@@ -282,6 +282,16 @@ Verified: tsc build, eslint (0 warnings), prettier (clean), vite build (renderer
 
 Known limitation (unchanged from Alpha, not addressed this sprint): still requires Python 3.11+ pre-installed on the target machine; installer remains unsigned — both tracked as the top Beta priorities
 
+Sprint 6 Final Release Verification — Completed
+
+A completely fresh, from-scratch verification pass (no assumed prior session state): every Electron/Python/Node process killed, `dist`/`dist-electron`/`node_modules/.vite`/`database/nemi.db`/`logs/backend.log` deleted, then rebuilt and relaunched from zero. Confirmed `ELECTRON_RUN_AS_NODE` is still inherited at the Process environment scope only (User/Machine confirmed empty via `[System.Environment]::GetEnvironmentVariable`) — unchanged, expected, and directly bracketed with a negative/positive control: launching with the variable present and unmitigated fails deterministically ("Process failed to launch!"); launching with exactly the operation `vite.config.ts` performs (`delete process.env.ELECTRON_RUN_AS_NODE`) applied succeeds with `window.nemi` present — proving the fix mechanism itself, not just its outcome
+
+The real `npm run dev` command was run fresh with the ambient variable left untouched: Electron launched (4-process tree), the Python backend spawned and answered `GET /health` with `200 {"status":"ok",...}`, and a graceful window close (`CloseMainWindow()`, not a force-kill) cleanly terminated every Electron process and the Python child with zero orphaned processes — verifying both the fix and the documented Sprint 4 graceful-shutdown behavior still hold
+
+A 17-point deep verification (Playwright-driven, built app, zero console/page errors captured) confirmed: window opens, React UI renders, backend starts automatically and reaches `ready`, StatusBar shows Ready (within its documented 5s poll interval — an initial single-run check at 1.5s post-ready showed a stale "Backend Starting" label, investigated and confirmed to be a test-timing artifact against `POLL_INTERVAL_MS = 5000` in `StatusBar.tsx`, not an application defect, then reproduced clean on two subsequent full reruns with a correct wait margin), Logger Panel receives real `backend.startup`/`backend.stdout` entries, Project Explorer renders with Open Folder/New Project buttons present, and the underlying Open-Folder/New-Project pipeline (`openProject()`, `createFile()`, `listDirectory()`) was exercised end-to-end against a real temp directory — including one that happened to land on a Windows short-path alias, incidentally reconfirming the Sprint 5 `fs.realpath()` fix still holds. Native OS folder-picker dialogs themselves remain outside what Playwright can drive (a native Win32 dialog, not part of the Chromium DOM) — same documented boundary as Sprint 5, not a new limitation
+
+No code changes were required this pass — every check passed against the code already pushed in the two prior Sprint 6 commits. `docs/SPRINT_6_FINAL_REPORT.md` created with the full evidence log
+
 Sprint 7 — Pending Approval
 
 ---

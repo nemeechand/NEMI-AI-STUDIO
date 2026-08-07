@@ -1,8 +1,8 @@
 # ARCHITECTURE.md
 
-Version: 1.2
-Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5)
-Governs: Sprint 6 onward
+Version: 1.3
+Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6)
+Governs: Sprint 7 onward
 
 ---
 
@@ -287,6 +287,46 @@ without fabricating capability the app doesn't have.
 
 ---
 
+# AI CHAT PANEL & CODE EDITOR (reserved — Sprint 6, not implemented)
+
+This is a documentation-only reservation prepared during Sprint 6's
+stabilization work, so a future sprint has a locked starting point
+instead of an open decision. No code, folders, or IPC channels from
+this section exist yet — writing them without a use case would violate
+`agents/architect.md`'s "never create temporary solutions."
+
+**AI Chat Panel**
+
+- UI: `frontend/src/components/chat/` — a new sibling to
+  `components/explorer/`, `components/logger/`, `components/dashboard/`.
+- State: `frontend/src/ai/` following the exact Context+Provider+Hook
+  three-file pattern locked under STATE MANAGEMENT PATTERN above
+  (`ai-context.ts` / `AiProvider.tsx` / `useAi.ts`), matching how
+  `theme/` and `project/` are already structured.
+- IPC: a future `window.nemi.ai.*` namespace, added to
+  `electron-api.d.ts` the same way `backend` and `fs` were — the
+  renderer will still never call the backend HTTP API directly (see IPC
+  Boundary above). Chat responses will need streaming; the backend
+  framework decision in Sprint 4 already anticipated this ("a
+  straightforward path to streaming (SSE) responses once AI provider
+  calls are added"), so the transport question is already answered —
+  only the endpoint and IPC plumbing remain to be built.
+- Provider secrets: per the AI Layer section above, AI provider calls
+  and their credentials live in `backend/app`, never the renderer —
+  already locked in Sprint 4, unaffected by this reservation.
+
+**Code Editor**
+
+- `FileEditor.tsx`'s plain-`<textarea>` scope was already documented
+  as a deliberate simplification in Sprint 5 (see FILESYSTEM
+  OWNERSHIP above). The upgrade path is to replace its internals with
+  Monaco or CodeMirror while keeping the same external contract it
+  already has — the `onOpenFile(path)` prop from `AppShell.tsx` and
+  `window.nemi.fs.readFile`/`writeFile` — so adopting a real editor
+  is an internal swap, not a renderer-wide API change.
+
+---
+
 # PLUGIN / EXTENSION ARCHITECTURE (future — not started)
 
 MASTER_SPECIFICATION.md lists "Plugin Marketplace" under FUTURE
@@ -337,6 +377,10 @@ must never run with Node.js integration in the renderer.
 11. **(Sprint 5)** `openProject()` always resolves the real
     (long-form) path via `fs.realpath()` before watching, to avoid a
     Windows-specific libuv crash on short-path aliases.
+12. **(Sprint 6)** AI Chat Panel and Code Editor locations/patterns are
+    reserved (see AI CHAT PANEL & CODE EDITOR above) but not yet
+    implemented — a documentation-only decision so a future sprint
+    doesn't have to re-derive where this work belongs.
 
 ---
 

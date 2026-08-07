@@ -1,7 +1,13 @@
 import { app } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
-import { BACKEND_HOST, BACKEND_PORT, checkHealth } from './backend-client';
+import {
+  BACKEND_HOST,
+  BACKEND_PORT,
+  checkHealth,
+  postLog,
+  type HealthResponse,
+} from './backend-client';
 
 export type BackendState = 'starting' | 'ready' | 'error' | 'stopped';
 
@@ -9,6 +15,8 @@ export interface BackendHealth {
   state: BackendState;
   port: number;
   message?: string;
+  version?: string;
+  uptimeSeconds?: number;
 }
 
 const STARTUP_TIMEOUT_MS = 15_000;
@@ -17,6 +25,7 @@ const POLL_INTERVAL_MS = 300;
 let child: ChildProcess | null = null;
 let state: BackendState = 'stopped';
 let lastError: string | undefined;
+let lastHealth: HealthResponse | undefined;
 
 function resolveBackendDir(electronDirname: string): string {
   if (app.isPackaged) {
@@ -38,13 +47,47 @@ async function waitForHealthy(timeoutMs: number): Promise<void> {
   while (Date.now() < deadline) {
     try {
       const response = await checkHealth();
-      if (response.ok) return;
+      if (response.ok) {
+        lastHealth = (await response.json()) as HealthResponse;
+        return;
+      }
     } catch {
       // Backend not accepting connections yet — keep polling.
     }
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
   throw new Error(`Backend did not become healthy within ${timeoutMs}ms`);
+}
+
+/**
+ * Refreshes the cached health snapshot in the background so uptime/version
+ * shown to the renderer don't go stale between startup and the next call —
+ * fire-and-forget, never throws (getBackendHealth() always returns the last
+ * known-good snapshot regardless of this refresh's outcome).
+ */
+function refreshHealthSnapshot(): void {
+  void checkHealth()
+    .then(async (response) => {
+      if (response.ok) {
+        lastHealth = (await response.json()) as HealthResponse;
+      }
+    })
+    .catch(() => {
+      // Ignore — StatusBar surfaces real backend loss via `state`, not this.
+    });
+}
+
+/**
+ * Surfaces raw backend process output in the Logger Panel (which polls the
+ * `logs` table `postLog()` already writes to) — previously this only went
+ * to Electron's console. Split multi-line chunks so each line becomes its
+ * own log row instead of one run-on message.
+ */
+function forwardToLogger(level: 'DEBUG' | 'WARNING', source: string, chunk: Buffer): void {
+  for (const line of chunk.toString().split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed) postLog(level, source, trimmed);
+  }
 }
 
 export function startBackend(electronDirname: string): void {
@@ -66,9 +109,11 @@ export function startBackend(electronDirname: string): void {
 
   proc.stdout?.on('data', (chunk: Buffer) => {
     console.log(`[backend] ${chunk.toString().trim()}`);
+    forwardToLogger('DEBUG', 'backend.stdout', chunk);
   });
   proc.stderr?.on('data', (chunk: Buffer) => {
     console.error(`[backend] ${chunk.toString().trim()}`);
+    forwardToLogger('WARNING', 'backend.stderr', chunk);
   });
 
   proc.on('error', (error: NodeJS.ErrnoException) => {
@@ -102,6 +147,7 @@ export function startBackend(electronDirname: string): void {
 
 export function stopBackend(): void {
   state = 'stopped';
+  lastHealth = undefined;
   if (child) {
     child.kill();
     child = null;
@@ -109,5 +155,12 @@ export function stopBackend(): void {
 }
 
 export function getBackendHealth(): BackendHealth {
-  return { state, port: BACKEND_PORT, message: lastError };
+  if (state === 'ready') refreshHealthSnapshot();
+  return {
+    state,
+    port: BACKEND_PORT,
+    message: lastError,
+    version: lastHealth?.version,
+    uptimeSeconds: lastHealth?.uptime_seconds,
+  };
 }

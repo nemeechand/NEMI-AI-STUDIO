@@ -13,6 +13,13 @@ export interface LogEntry {
   created_at: string;
 }
 
+export interface HealthResponse {
+  status: string;
+  version: string;
+  env: string;
+  uptime_seconds: number;
+}
+
 function baseUrl(): string {
   return `http://${BACKEND_HOST}:${BACKEND_PORT}`;
 }

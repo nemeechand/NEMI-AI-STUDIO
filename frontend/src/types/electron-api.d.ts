@@ -7,6 +7,8 @@ declare global {
     state: BackendState;
     port: number;
     message?: string;
+    version?: string;
+    uptimeSeconds?: number;
   }
 
   type LogLevel = 'INFO' | 'WARNING' | 'ERROR' | 'DEBUG';

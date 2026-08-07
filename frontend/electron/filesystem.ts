@@ -23,8 +23,15 @@ const IGNORED_NAMES = new Set([
 
 const MAX_READABLE_FILE_BYTES = 2 * 1024 * 1024; // 2 MB — see docs/ARCHITECTURE.md
 
+// Coalesces bursts of watcher events (e.g. `npm install`, a git checkout can
+// fire hundreds of add/change events in milliseconds) into a single
+// notification, instead of one renderer refetch per raw filesystem event.
+const WATCH_NOTIFY_DEBOUNCE_MS = 300;
+
 let watcher: FSWatcher | null = null;
 let changeListener: ((event: { path: string }) => void) | null = null;
+let pendingNotifyPath: string | null = null;
+let notifyDebounceTimer: NodeJS.Timeout | null = null;
 
 export function setChangeListener(listener: ((event: { path: string }) => void) | null): void {
   changeListener = listener;
@@ -124,7 +131,12 @@ function startWatching(rootPath: string): Promise<void> {
   });
 
   const notify = (changedPath: string) => {
-    changeListener?.({ path: changedPath });
+    pendingNotifyPath = changedPath;
+    if (notifyDebounceTimer) clearTimeout(notifyDebounceTimer);
+    notifyDebounceTimer = setTimeout(() => {
+      notifyDebounceTimer = null;
+      if (pendingNotifyPath) changeListener?.({ path: pendingNotifyPath });
+    }, WATCH_NOTIFY_DEBOUNCE_MS);
   };
 
   watcher
@@ -146,6 +158,11 @@ function startWatching(rootPath: string): Promise<void> {
 }
 
 function stopWatching(): void {
+  if (notifyDebounceTimer) {
+    clearTimeout(notifyDebounceTimer);
+    notifyDebounceTimer = null;
+  }
+  pendingNotifyPath = null;
   if (watcher) {
     void watcher.close();
     watcher = null;

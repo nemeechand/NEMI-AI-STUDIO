@@ -252,7 +252,37 @@ Verified on this machine: NSIS installer silently installed, correct files/short
 
 Known limitation (deliberate, documented): this Alpha still requires Python 3.11+ pre-installed on the target machine — no standalone Python runtime is bundled yet (e.g. via PyInstaller); the installer is also unsigned (no code-signing certificate). Both are recommended as the top priorities for a Beta build
 
-Sprint 6 — Pending Approval
+Sprint 6 — Completed (Stabilize Alpha Build)
+
+Goal:
+
+Stabilize the Windows Alpha build, fix remaining bugs, improve the Project Explorer, Logger Panel, and backend status monitoring, optimize performance, prepare the architecture for a future AI Chat Panel and Code Editor, and verify.
+
+Delivered:
+
+Fixed a genuine Alpha-breaking bug found uncommitted from a prior debugging session: `frontend/electron/main.ts` (last commit) pointed the preload script at `preload.js`, but `vite-plugin-electron` (with this package's `"type": "module"`) only ever emits `dist-electron/preload.mjs` — confirmed via a clean rebuild. The mismatch meant Electron silently failed to load the preload script, `contextBridge` never ran, and `window.nemi` was `undefined` for every packaged/dev launch — breaking StatusBar, Project Explorer, Logger Panel, and the Dashboard's Open/New Project buttons. Fixed by keeping `main.ts` pointed at `preload.mjs` (the file that actually exists) and verified end-to-end via a Playwright-driven Electron launch: `window.nemi` present, backend health reachable, Explorer/Logger functional
+
+During root-causing this, briefly misdiagnosed a second, deeper-looking crash (`import { app } from 'electron'` failing in Node's ESM loader) as a real Electron/Node ESM-interop bug; it turned out to be caused by `ELECTRON_RUN_AS_NODE=1` being set in the verification shell, not a real defect — confirmed by re-testing with the variable unset. A CJS-build-output fix was drafted and verified working, then reverted in favor of the original minimal fix once the false premise was caught, keeping the change scoped to what the actual bug required
+
+Removed leftover debugging artifacts from the same prior session: `frontend/_cdp_check.mjs`, `frontend/_cdp_check2.mjs` (throwaway CDP scripts), and a stray `hello.py` at the repo root (unrelated to `backend/app`)
+
+Backend status monitoring improved: `BackendHealth` (`backend-process.ts`) now carries `version`/`uptimeSeconds` from the `/health` response instead of discarding it once ready (refreshed in the background on each `getBackendHealth()` call); `StatusBar.tsx` shows a title/tooltip with version + formatted uptime; label bumped to "Sprint 6 — Stabilization"
+
+Logger Panel improved: backend `stdout`/`stderr` (previously console-only, a known pending item) now also flow into the same `logs` table via the existing `postLog()` pipeline (`backend.stdout` at DEBUG, `backend.stderr` at WARNING, split per line) — verified a real launch produced visible `backend.stdout` rows; added a client-side level filter dropdown (ALL/INFO/WARNING/ERROR/DEBUG) to `LoggerPanel.tsx`
+
+Project Explorer improved: the filesystem watcher's change notifications (`filesystem.ts`) are now debounced (300ms trailing) instead of firing one renderer refetch per raw chokidar event — a bulk operation (e.g. `npm install`, a git checkout) previously fired hundreds of redundant `listDirectory` IPC round-trips in a burst; added a "Loading…" indicator to `ExplorerTreeItem` while a folder's first expansion is in flight
+
+Performance: the watcher debounce above was the one real inefficiency found; no other hot paths needed changes (polling intervals and per-request SQLite connections are already appropriate for a single-user desktop app, as documented)
+
+Architecture prepared (documentation only, per `agents/architect.md` — "never write code") for a future AI Chat Panel and Code Editor: `docs/ARCHITECTURE.md` gained a new section reserving `frontend/src/components/chat/` + `frontend/src/ai/` (Context+Provider+Hook, matching the Theme Manager pattern) and a future `window.nemi.ai.*` IPC namespace for the Chat Panel, and documents that `FileEditor.tsx`'s plain-textarea scope is the intended Monaco/CodeMirror upgrade target behind the same `onOpenFile`/`window.nemi.fs` contract — no new code, folders, or IPC channels were created
+
+docs/SPRINT_6_REPORT.md created
+
+Verified: tsc build, eslint (0 warnings), prettier (clean), vite build (renderer + main + preload); pytest (14 passed), ruff check (all checks passed), mypy strict (0 issues, 23 source files); a Playwright-driven Electron launch (built app, not just `npm run dev`) confirmed `window.nemi` exists, backend health reaches `ready` with real version/uptime, the Logger Panel's level filter and `backend.stdout` entries render correctly, and the app closes cleanly
+
+Known limitation (unchanged from Alpha, not addressed this sprint): still requires Python 3.11+ pre-installed on the target machine; installer remains unsigned — both tracked as the top Beta priorities
+
+Sprint 7 — Pending Approval
 
 ---
 
@@ -376,6 +406,22 @@ Sprint 1 Completed
 
 ✔ Alpha Build Verified (installer install/uninstall, portable exe, both launched with working bundled backend, no orphaned processes)
 
+✔ Sprint 6 Completed — Alpha Stabilization; Explorer/Logger/Backend-Monitoring Improvements; AI Chat/Editor Architecture Reserved
+
+✔ Fixed the Alpha-breaking preload path bug (`main.ts` now correctly points at `preload.mjs`, the file `vite-plugin-electron` actually emits) — verified via a Playwright-driven Electron launch of the built app
+
+✔ Backend `stdout`/`stderr` Now Surfaced in the Logger Panel (`backend.stdout`/`backend.stderr` sources) — previously console-only
+
+✔ Logger Panel Level Filter Added (ALL/INFO/WARNING/ERROR/DEBUG)
+
+✔ BackendHealth Extended with `version`/`uptimeSeconds`; StatusBar Shows a Version/Uptime Tooltip
+
+✔ Filesystem Watcher Notifications Debounced (300ms) — fixes a redundant-refetch-storm on bulk filesystem operations; Explorer Shows a Loading Indicator on First Folder Expansion
+
+✔ docs/ARCHITECTURE.md Reserves AI Chat Panel (`components/chat/`, `ai/`, future `window.nemi.ai.*`) and Code Editor (Monaco/CodeMirror upgrade path) Locations — documentation only, no code
+
+✔ Sprint 6 Verified (tsc, eslint, prettier, vite build; pytest ×14, ruff, mypy strict; Playwright-driven Electron launch of the built app confirming the preload fix and all new features end-to-end)
+
 ---
 
 # PENDING TASKS
@@ -404,7 +450,7 @@ Resizable/drag panel splitters (sidebar and logger panel are currently show/hide
 
 FileEditor is a plain textarea by design (no syntax highlighting/language server) — a real code-editor experience (Monaco/CodeMirror) is future work
 
-Backend stdout/stderr are piped to Electron's console but not yet surfaced in the Logger Panel (which shows the SQLite `logs` table, not live process output)
+AI Chat Panel and Code Editor: locations/patterns reserved in `docs/ARCHITECTURE.md` (Sprint 6) but not yet implemented — no `components/chat/`, `ai/`, `window.nemi.ai.*`, or Monaco/CodeMirror integration exists yet
 
 ---
 
@@ -558,17 +604,19 @@ Sprint 5 Completed — Filesystem ownership locked as Electron main (not Python)
 
 Windows Alpha Build 1 Completed (0.1.0-alpha.1) — electron-builder producing an NSIS installer and portable exe, application icon generated, verified install/launch/uninstall on Windows; still requires Python pre-installed on the target machine (documented, not solved this build)
 
+Sprint 6 Completed — Fixed the Alpha-breaking preload path bug (`window.nemi` was undefined on every launch); surfaced backend stdout/stderr in the Logger Panel with a level filter; extended BackendHealth with version/uptime and a StatusBar tooltip; debounced the filesystem watcher to fix a redundant-refetch storm on bulk file operations; reserved (docs only) the AI Chat Panel and Code Editor architecture for a future sprint
+
 ---
 
 # NEXT MILESTONE
 
-Sprint 6
+Sprint 7
 
 Repositories/business logic for the `projects` table — the natural next step now that projects are opened for real; would let recently-opened projects be tracked server-side instead of only in localStorage
 
-Backend stdout/stderr surfaced in the Logger Panel (currently console-only)
-
 Standalone Python runtime bundling (PyInstaller or equivalent) for a Beta build — the packaging pipeline itself is now proven (Alpha Build 1), this is the remaining gap before the app runs with zero prerequisites
+
+AI Chat Panel and Code Editor implementation — architecture reserved in Sprint 6 (`docs/ARCHITECTURE.md`), ready to build against
 
 ---
 

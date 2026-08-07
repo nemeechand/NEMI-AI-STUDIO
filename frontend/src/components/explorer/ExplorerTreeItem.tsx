@@ -18,6 +18,7 @@ export function ExplorerTreeItem({
 }: ExplorerTreeItemProps) {
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<ExplorerEntry[] | null>(null);
+  const [loadingChildren, setLoadingChildren] = useState(false);
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [displayName, setDisplayName] = useState(entry.name);
@@ -30,12 +31,15 @@ export function ExplorerTreeItem({
   }, [entry.name]);
 
   async function loadChildren() {
+    setLoadingChildren(true);
     try {
       const result = await window.nemi.fs.listDirectory(entry.path);
       setChildren(result);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load folder');
+    } finally {
+      setLoadingChildren(false);
     }
   }
 
@@ -140,6 +144,14 @@ export function ExplorerTreeItem({
           style={{ paddingLeft: `${depth * 14 + 20}px` }}
         >
           {error}
+        </p>
+      )}
+      {isFolder && expanded && loadingChildren && children === null && (
+        <p
+          className="px-3 py-0.5 text-xs text-fg-muted"
+          style={{ paddingLeft: `${depth * 14 + 20}px` }}
+        >
+          Loading…
         </p>
       )}
       {isFolder && expanded && creating && (

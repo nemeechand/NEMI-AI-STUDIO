@@ -4,17 +4,18 @@ import { useOpenProjectDialog } from '../../project/useOpenProjectDialog';
 
 interface QuickActionsCardProps {
   onOpenSettings: () => void;
+  onNewProject: () => void;
 }
 
-export function QuickActionsCard({ onOpenSettings }: QuickActionsCardProps) {
-  const { openExisting, createNew } = useOpenProjectDialog();
+export function QuickActionsCard({ onOpenSettings, onNewProject }: QuickActionsCardProps) {
+  const { openExisting } = useOpenProjectDialog();
 
   return (
     <DashboardCard title="Quick Actions" icon={<FolderPlus size={14} />}>
       <div className="flex flex-col gap-2">
         <button
           type="button"
-          onClick={() => void createNew()}
+          onClick={onNewProject}
           className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-left text-sm text-fg transition-colors hover:border-accent hover:text-accent"
         >
           <FolderPlus size={16} />

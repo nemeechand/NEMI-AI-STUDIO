@@ -21,3 +21,19 @@ class LogEntryOut(BaseModel):
     source: str
     message: str
     created_at: str
+
+
+class ProjectOpenedCreate(BaseModel):
+    path: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=1000)
+
+
+class ProjectOut(BaseModel):
+    id: str
+    name: str
+    path: str
+    description: str | None
+    created_at: str
+    updated_at: str
+    last_opened_at: str | None

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { BackendHealth } from './backend-process';
-import type { LogEntry } from './backend-client';
+import type { LogEntry, ProjectRecord } from './backend-client';
 import type { ExplorerEntry } from './filesystem';
 
 const backend = {
@@ -9,8 +9,8 @@ const backend = {
 };
 
 const fsApi = {
-  selectProjectFolder: (mode: 'open' | 'new'): Promise<string | null> =>
-    ipcRenderer.invoke('fs:select-project-folder', mode),
+  selectProjectFolder: (): Promise<string | null> => ipcRenderer.invoke('fs:select-project-folder'),
+  selectDirectory: (): Promise<string | null> => ipcRenderer.invoke('fs:select-directory'),
   openProject: (projectPath: string): Promise<boolean> =>
     ipcRenderer.invoke('fs:open-project', projectPath),
   closeProject: (): Promise<void> => ipcRenderer.invoke('fs:close-project'),
@@ -21,6 +21,8 @@ const fsApi = {
     ipcRenderer.invoke('fs:write-file', filePath, content),
   createFile: (dirPath: string, name: string): Promise<string> =>
     ipcRenderer.invoke('fs:create-file', dirPath, name),
+  createDirectory: (parentPath: string, name: string): Promise<string> =>
+    ipcRenderer.invoke('fs:create-directory', parentPath, name),
   renameEntry: (entryPath: string, newName: string): Promise<string> =>
     ipcRenderer.invoke('fs:rename-entry', entryPath, newName),
   deleteEntry: (entryPath: string): Promise<void> =>
@@ -31,6 +33,14 @@ const fsApi = {
     ipcRenderer.on('fs:changed', listener);
     return () => ipcRenderer.removeListener('fs:changed', listener);
   },
+};
+
+const projects = {
+  listRecent: (limit?: number): Promise<ProjectRecord[]> =>
+    ipcRenderer.invoke('projects:list-recent', limit),
+  recordOpened: (path: string, name: string, description?: string): Promise<ProjectRecord> =>
+    ipcRenderer.invoke('projects:record-opened', path, name, description),
+  remove: (id: string): Promise<void> => ipcRenderer.invoke('projects:remove', id),
 };
 
 const windowControls = {
@@ -46,4 +56,4 @@ const windowControls = {
   },
 };
 
-contextBridge.exposeInMainWorld('nemi', { windowControls, backend, fs: fsApi });
+contextBridge.exposeInMainWorld('nemi', { windowControls, backend, fs: fsApi, projects });

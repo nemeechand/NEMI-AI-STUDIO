@@ -95,6 +95,20 @@ export async function createFile(dirPath: string, name: string): Promise<string>
   return targetPath;
 }
 
+export async function createDirectory(parentPath: string, name: string): Promise<string> {
+  const targetPath = path.join(parentPath, name);
+  try {
+    await fs.mkdir(targetPath);
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'EEXIST') {
+      throw new Error(`"${name}" already exists in this location.`);
+    }
+    throw error;
+  }
+  postLog('INFO', 'fs.project', `Created new project folder ${targetPath}`);
+  return targetPath;
+}
+
 export async function renameEntry(entryPath: string, newName: string): Promise<string> {
   const newPath = path.join(path.dirname(entryPath), newName);
   await fs.rename(entryPath, newPath);

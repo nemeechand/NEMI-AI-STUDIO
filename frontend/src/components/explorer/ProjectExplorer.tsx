@@ -3,19 +3,17 @@ import { FolderOpen, FolderPlus, RefreshCw, X } from 'lucide-react';
 import { IconButton } from '../common/IconButton';
 import { useProject } from '../../project/useProject';
 import { useOpenProjectDialog } from '../../project/useOpenProjectDialog';
+import { basename } from '../../project/pathUtils';
 import { ExplorerTree } from './ExplorerTree';
 
 interface ProjectExplorerProps {
   onOpenFile: (path: string) => void;
+  onNewProject: () => void;
 }
 
-function projectDisplayName(projectPath: string): string {
-  return projectPath.split(/[\\/]/).filter(Boolean).pop() ?? projectPath;
-}
-
-export function ProjectExplorer({ onOpenFile }: ProjectExplorerProps) {
+export function ProjectExplorer({ onOpenFile, onNewProject }: ProjectExplorerProps) {
   const { projectPath, closeProject } = useProject();
-  const { openExisting, createNew } = useOpenProjectDialog();
+  const { openExisting } = useOpenProjectDialog();
   const [watchVersion, setWatchVersion] = useState(0);
 
   useEffect(() => {
@@ -27,7 +25,7 @@ export function ProjectExplorer({ onOpenFile }: ProjectExplorerProps) {
     <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-surface-elevated">
       <div className="flex items-center justify-between px-3 py-2">
         <span className="truncate text-xs font-semibold uppercase tracking-wider text-fg-muted">
-          {projectPath ? projectDisplayName(projectPath) : 'Project Explorer'}
+          {projectPath ? basename(projectPath) : 'Project Explorer'}
         </span>
         {projectPath && (
           <div className="flex shrink-0 items-center gap-0.5">
@@ -59,7 +57,7 @@ export function ProjectExplorer({ onOpenFile }: ProjectExplorerProps) {
             </button>
             <button
               type="button"
-              onClick={() => void createNew()}
+              onClick={onNewProject}
               className="flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-fg hover:border-accent hover:text-accent"
             >
               <FolderPlus size={13} /> New Project

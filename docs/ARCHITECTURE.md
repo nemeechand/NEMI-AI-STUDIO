@@ -1,8 +1,8 @@
 # ARCHITECTURE.md
 
-Version: 1.3
-Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6)
-Governs: Sprint 7 onward
+Version: 1.4
+Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7)
+Governs: Sprint 8 onward
 
 ---
 
@@ -30,11 +30,15 @@ Location: `frontend/src`
 - `components/logger/` — Logger Panel view.
 - `components/dashboard/` — Dashboard view.
 - `components/settings/` — Settings modal.
+- `components/workspace/` (Sprint 7) — Workspace Manager panel and New
+  Project Wizard modal; see WORKSPACE & PROJECT MANAGEMENT below.
 - `components/common/` — shared, reusable, presentation-only primitives
   (e.g. `IconButton`). A component belongs here only if it has no
   feature-specific knowledge.
-- `theme/` — Theme Manager (React Context + provider + hook), the only
-  cross-cutting frontend state so far.
+- `theme/`, `project/`, `workspace/` — cross-cutting frontend state
+  (Theme Manager, active-project state, and workspace/session
+  persistence respectively), each following the Context+Provider+Hook
+  pattern (see STATE MANAGEMENT PATTERN below).
 
 Rule: components read data through props or hooks only. No component
 may import Node/Python/filesystem APIs directly — that always goes
@@ -77,9 +81,9 @@ outside world.
 - SQLite — see `docs/DATABASE_SCHEMA.md` for the finalized table
   design. As of Sprint 4 the schema is created automatically at
   backend startup (`app/db/schema.py::init_db`) into
-  `database/nemi.db`. Only the `logs` table has a repository
-  (`app/db/repositories/logs_repository.py`) so far, now with a real
-  `GET /logs` + `POST /logs` API (Sprint 5) — the other seven tables
+  `database/nemi.db`. `logs` (`GET/POST /logs`, Sprint 5) and, as of
+  Sprint 7, `projects` (`GET /projects/recent`, `POST /projects/opened`,
+  `DELETE /projects/{id}`) have repositories — the other six tables
   are schema-ready but have no repository/business logic yet,
   intentionally deferred to the sprints that need them.
 - Filesystem — as of Sprint 5, real project files on disk. Ownership
@@ -113,16 +117,18 @@ Three processes, already implemented and hardened in Sprint 2:
 ## IPC Boundary (locked decision)
 
 All renderer → native calls go through `window.nemi`
-(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 5
-this surface has three namespaces: `windowControls` (Sprint 2),
-`backend` (Sprint 4: `health()`; Sprint 5: `logs()`), and `fs`
-(Sprint 5: project/file CRUD + change notifications). Future
-database or AI-agent triggers must be added here first, as a typed
-method, before any component may call them. A component must never
-assume Node.js globals exist. All ambient types shared across
-`window.nemi` methods (`ExplorerEntry`, `LogEntry`, `BackendHealth`,
-etc.) live inside the `declare global` block of `electron-api.d.ts`
-so they're usable anywhere in the renderer without imports.
+(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 7
+this surface has four namespaces: `windowControls` (Sprint 2),
+`backend` (Sprint 4: `health()`; Sprint 5: `logs()`), `fs`
+(Sprint 5: project/file CRUD + change notifications; Sprint 7:
+`selectDirectory()`, `createDirectory()`), and `projects` (Sprint 7:
+`listRecent()`, `recordOpened()`, `remove()`). Future database or
+AI-agent triggers must be added here first, as a typed method, before
+any component may call them. A component must never assume Node.js
+globals exist. All ambient types shared across `window.nemi` methods
+(`ExplorerEntry`, `LogEntry`, `BackendHealth`, `ProjectRecord`, etc.)
+live inside the `declare global` block of `electron-api.d.ts` so
+they're usable anywhere in the renderer without imports.
 
 The renderer never talks to the backend HTTP API directly — it has no
 network access to it, and the CSP's `connect-src 'self'` intentionally
@@ -230,11 +236,18 @@ was designed in Sprint 3.
   temp directory — used in Sprint 5 to verify the CRUD operations and
   the watcher without needing the full Electron+IPC+UI stack.
 - `project-dialogs.ts` — the only module that imports Electron's
-  `dialog`/`BrowserWindow`. `selectProjectFolder(window, mode)`:
-  `'open'` shows a native folder picker; `'new'` repurposes
-  `showSaveDialog` (lets the user navigate to a location and type a
-  name) then `fs.mkdir`s it. Kept separate from `filesystem.ts`
-  specifically so the CRUD/watch logic has no Electron dependency.
+  `dialog`/`BrowserWindow`. `selectProjectFolder(window)` shows a
+  native folder picker for opening an existing project.
+  `selectDirectory(window)` (Sprint 7) shows the same kind of picker
+  but for choosing a *parent* directory for the New Project Wizard —
+  kept as a separate function despite the identical dialog call so
+  "pick a folder to open as a project" and "pick a folder to create a
+  new project inside" don't share overloaded meaning. (Sprint 5's
+  `'new'` mode, which repurposed `showSaveDialog` to create a project
+  folder via a native dialog, was removed in Sprint 7 once the New
+  Project Wizard — an in-app form, see WORKSPACE & PROJECT MANAGEMENT
+  below — replaced it.) Kept separate from `filesystem.ts` specifically
+  so the CRUD/watch logic has no Electron dependency.
 - `backend-client.ts` — `fetchRecentLogs()`, `postLog()`
   (fire-and-forget, contained errors), `checkHealth()`. File
   operations call `postLog()` after succeeding, writing an audit
@@ -284,6 +297,77 @@ no language server, no diffing. A real code-editor experience
 (Monaco/CodeMirror) is out of scope for this sprint; this component
 exists only to make "Open" and "Save" genuinely work end-to-end
 without fabricating capability the app doesn't have.
+
+---
+
+# WORKSPACE & PROJECT MANAGEMENT (locked decision — Sprint 7)
+
+**Single active project, not simultaneous multi-project**: one project
+is open/watched at a time, with a fast switcher between tracked
+projects — not multiple projects open in tabs/panes simultaneously.
+This matches the architecture already locked in Sprint 5: `ProjectContext`
+holds one `projectPath`, and `filesystem.ts` has a single module-level
+`watcher` (`startWatching()` calls `stopWatching()` first). True
+concurrent multi-project support would require reworking that into a
+per-project watcher map plus a multi-root Explorer UI — a much larger
+change, deliberately out of scope this sprint, and a candidate for a
+future sprint if ever needed.
+
+**`projects` table now has a repository** (`backend/app/db/repositories/projects_repository.py`):
+`record_opened()` upserts by `path` (unique), `list_recent()` orders by
+the new `last_opened_at` column (see `docs/DATABASE_SCHEMA.md` — kept
+distinct from `updated_at` so editing metadata without opening a
+project never changes its recency), `delete()` removes a tracking row
+only, never the actual folder. `ProjectProvider.tsx` funnels every way
+a project can become active — Open Folder, the New Project Wizard, a
+Workspace Manager switch, and launch-time session restore — through
+one internal `openAndRecord()` helper, so recording happens exactly
+once per open rather than being duplicated at each call site.
+
+**Workspace state = active project + the one open file** (matches
+`FileEditor.tsx`'s existing single-file scope — no editor tabs).
+Window chrome (sidebar/logger visibility) is deliberately not part of
+persisted workspace state. A new `frontend/src/workspace/` module
+(`workspace-context.ts` / `WorkspaceProvider.tsx` / `useWorkspace.ts`,
+the same three-file pattern as `theme/` and `project/`) owns
+`openFilePath` and auto-saves it to `localStorage` under a
+**per-project-scoped key** (`nemi.workspace.openFile.<projectPath>`) —
+scoping by project, rather than one global slot, is what makes
+switching projects in the Workspace Manager restore each project's own
+last-open file instead of clobbering it. `WorkspaceProvider` consumes
+`useProject()` and re-derives `openFilePath` whenever the active
+project changes, which also naturally handles launch-time restore
+(`ProjectProvider`'s async restore effect changes `projectPath`, and
+`WorkspaceProvider` reacts to that the same way it would to a manual
+switch — one code path, not two). `AppShell.tsx` reads/writes the open
+file exclusively through `useWorkspace()` and separately owns only the
+transient, never-persisted file *content* (always re-read fresh via
+`window.nemi.fs.readFile()` whenever `openFilePath` changes — content
+is never cached in `localStorage`).
+
+**New Project Wizard replaces the old native-save-dialog creation
+flow**: Sprint 5's `selectProjectFolder(window, 'new')` repurposed
+`showSaveDialog` to pick a name and location in one native dialog.
+Sprint 7 replaces this with an in-app modal
+(`frontend/src/components/workspace/NewProjectWizard.tsx`, matching
+`SettingsModal.tsx`'s overlay/card/Escape-to-close pattern) with Name,
+Location (native directory picker via the new `window.nemi.fs.selectDirectory()`,
+distinct from `selectProjectFolder()` — see FILESYSTEM OWNERSHIP above),
+and an optional Description — the first UI path that ever populates
+`projects.description`. The old `'new'` mode was removed from
+`project-dialogs.ts` (dead code once superseded), not kept alongside.
+
+**Workspace Manager panel**
+(`frontend/src/components/workspace/WorkspaceManager.tsx`) is a second
+main-panel view, toggled via a new icon in `Sidebar.tsx` (extending,
+not replacing, the existing icon-bar/`active`-prop pattern) that shows
+in the same slot `ProjectExplorer` occupies. Lists recent projects
+(`window.nemi.projects.listRecent()`), highlights the active one,
+switches on click (`openProject(path)`), and removes entries from the
+recent list only (never touches disk). `RecentProjectsCard.tsx` on the
+Dashboard shows the same data in miniature (top 5, click-to-open) —
+both read from the same `GET /projects/recent` endpoint, no separate
+state.
 
 ---
 
@@ -352,9 +436,9 @@ must never run with Node.js integration in the renderer.
    HTTP over `127.0.0.1:8756` (fixed port), Electron main owns the
    Python child process's full lifecycle (spawn, health-poll, kill).
 6. **(Sprint 4)** SQLite schema is created automatically at backend
-   startup into `database/nemi.db`; only the `logs` table has a
-   repository so far — remaining tables are schema-ready, awaiting
-   the business logic that needs them.
+   startup into `database/nemi.db`; `logs` and, as of Sprint 7,
+   `projects` have repositories — remaining tables are schema-ready,
+   awaiting the business logic that needs them.
 7. **(Sprint 4)** Centralized logging is console + rotating file
    (`logs/backend.log`) via the stdlib `logging` module, separate
    from the structured `logs` SQLite table (which holds discrete
@@ -381,6 +465,20 @@ must never run with Node.js integration in the renderer.
     reserved (see AI CHAT PANEL & CODE EDITOR above) but not yet
     implemented — a documentation-only decision so a future sprint
     doesn't have to re-derive where this work belongs.
+13. **(Sprint 7)** Multi-project support means one active project with
+    a fast switcher, not simultaneous multi-project editing — matches
+    the existing single-watcher `filesystem.ts` constraint; true
+    concurrent multi-project is deliberately deferred (see WORKSPACE &
+    PROJECT MANAGEMENT above).
+14. **(Sprint 7)** Workspace state (active project + open file) is
+    auto-saved/restored via a new `workspace/` Context+Provider+Hook
+    module, persisted to `localStorage` under a per-project-scoped key
+    — not a single global slot, and not window chrome (sidebar/logger
+    visibility), which stays out of scope.
+15. **(Sprint 7)** The New Project Wizard (in-app form) replaces the
+    old native-save-dialog project-creation flow; `project-dialogs.ts`'s
+    `'new'` mode was removed once superseded, not kept as dead code
+    alongside it.
 
 ---
 

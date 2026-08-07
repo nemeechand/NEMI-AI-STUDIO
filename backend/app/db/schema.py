@@ -11,7 +11,8 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         path TEXT NOT NULL UNIQUE,
         description TEXT,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        last_opened_at TEXT
     )
     """,
     """
@@ -95,7 +96,23 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
 )
 
 
+def _add_column_if_missing(
+    connection: sqlite3.Connection, table: str, column: str, column_type: str
+) -> None:
+    """CREATE TABLE IF NOT EXISTS is a no-op on a table that already exists,
+    so a new column on an existing table (e.g. `projects` has existed empty
+    since Sprint 4) needs an explicit, idempotent ALTER TABLE — see
+    docs/DATABASE_SCHEMA.md's note on revisiting this once a column changes.
+    """
+    existing_columns = {
+        row[1] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column not in existing_columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+
+
 def init_db(connection: sqlite3.Connection) -> None:
     for statement in SCHEMA_STATEMENTS:
         connection.execute(statement)
+    _add_column_if_missing(connection, "projects", "last_opened_at", "TEXT")
     connection.commit()

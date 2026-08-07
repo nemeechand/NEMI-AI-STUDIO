@@ -20,6 +20,16 @@ export interface HealthResponse {
   uptime_seconds: number;
 }
 
+export interface ProjectRecord {
+  id: string;
+  name: string;
+  path: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  last_opened_at: string | null;
+}
+
 function baseUrl(): string {
   return `http://${BACKEND_HOST}:${BACKEND_PORT}`;
 }
@@ -58,4 +68,41 @@ export function postLog(level: string, source: string, message: string): void {
     .catch((error: unknown) => {
       console.error('[backend-client] Failed to post log', error);
     });
+}
+
+export async function fetchRecentProjects(limit = 20): Promise<ProjectRecord[]> {
+  const response = await fetch(`${baseUrl()}/projects/recent?limit=${limit}`, {
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`Backend returned ${response.status} for GET /projects/recent`);
+  }
+  return (await response.json()) as ProjectRecord[];
+}
+
+export async function recordProjectOpened(
+  path: string,
+  name: string,
+  description?: string,
+): Promise<ProjectRecord> {
+  const response = await fetch(`${baseUrl()}/projects/opened`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, name, description }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`Backend returned ${response.status} for POST /projects/opened`);
+  }
+  return (await response.json()) as ProjectRecord;
+}
+
+export async function removeRecentProject(id: string): Promise<void> {
+  const response = await fetch(`${baseUrl()}/projects/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`Backend returned ${response.status} for DELETE /projects/${id}`);
+  }
 }

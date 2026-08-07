@@ -300,7 +300,31 @@ All 15 requested checks passed: window opens, no black screen, Dashboard renders
 
 No code changes were required — this was the actual shipped artifact working correctly. `docs/FINAL_RELEASE_VERIFICATION.md` created with full evidence (build checksums, per-item results, methodology)
 
-Sprint 7 — Pending Approval
+Sprint 7 — Completed (Workspace & Project Management System)
+
+Goal:
+
+Build the Workspace & Project Management System: Recent Projects, New Project Wizard, Open Folder, Workspace Manager, multi-project support, project metadata, auto-save workspace, restore previous session — following existing architecture, without breaking Sprints 1–6, with continuous documentation and per-feature verification.
+
+Scope decision (confirmed with founder before implementation): "multi-project support" means one active project at a time with a fast switcher between tracked projects, not simultaneous multi-window/multi-tab editing — matches the architecture already locked in Sprint 5 (`ProjectContext` holds one `projectPath`; `filesystem.ts` has a single module-level watcher). True concurrent multi-project is explicitly deferred, not attempted.
+
+Delivered:
+
+Backend: the `projects` table (schema-ready since Sprint 3/4, never used) finally has a repository — `ProjectsRepository` (`record_opened()` upserts by `path`, `list_recent()`, `delete()`) backing `GET /projects/recent`, `POST /projects/opened`, `DELETE /projects/{id}`. Added `projects.last_opened_at` (distinct from `updated_at`, so editing metadata without opening never changes recency) via an idempotent `ALTER TABLE ADD COLUMN` migration in `init_db()` — the first real use of the "revisit if a column needs to change" note `docs/DATABASE_SCHEMA.md` had carried since Sprint 4
+
+Electron: new `window.nemi.projects.{listRecent,recordOpened,remove}` IPC namespace; `fs.selectDirectory()` (parent-directory picker for the Wizard, distinct from `selectProjectFolder()`) and `fs.createDirectory()` added to `filesystem.ts`/`project-dialogs.ts`/`main.ts`/`preload.ts`. Sprint 5's `selectProjectFolder(window, 'new')` native-save-dialog project-creation mode was removed (superseded by the Wizard, not kept as dead code alongside it) — `selectProjectFolder(window)` (Open Folder) is otherwise unchanged
+
+Renderer: new `frontend/src/workspace/` Context+Provider+Hook module (matching the locked three-file pattern) owns `openFilePath`, auto-saved to `localStorage` under a **per-project-scoped** key (`nemi.workspace.openFile.<projectPath>`) — switching projects restores each project's own last-open file instead of one global slot. `ProjectProvider.tsx` now funnels every way a project becomes active (Open Folder, Wizard, Workspace Manager switch, launch-time restore) through one internal `openAndRecord()` helper so recent-project tracking happens exactly once per open, not duplicated per call site
+
+New UI: `NewProjectWizard.tsx` (in-app modal — Name/Location/optional Description — replacing the old native-dialog creation flow), `WorkspaceManager.tsx` (second sidebar panel, toggled via a new `Sidebar.tsx` icon, listing/switching/removing recent projects), `RecentProjectsCard.tsx` (Dashboard card, same data in miniature). `AppShell.tsx` restructured so the open file's content is always read fresh via `window.nemi.fs.readFile()` whenever `useWorkspace()`'s `openFilePath` changes — never cached in `localStorage`, only the path is persisted
+
+docs/ARCHITECTURE.md gained a new "WORKSPACE & PROJECT MANAGEMENT (locked — Sprint 7)" section and three new locked-decision entries; docs/DATABASE_SCHEMA.md updated (new column, repository status, migration approach); docs/SPRINT_7_REPORT.md created
+
+Verified: tsc build, eslint (0 warnings), prettier (clean), vite build (renderer + main + preload); pytest (24 passed, 10 new), ruff check (all checks passed), mypy strict (0 issues, 26 source files); a 25-point Playwright-driven live verification (fresh Electron profile per run, zero cross-run contamination) covering both Sprint 1–6 regression (window/Dashboard/preload/backend/StatusBar/Logger/health/clean-shutdown) and every Sprint 7 feature (Wizard creation, Recent Projects, Workspace Manager list/switch/remove, file open/save/rename/delete under the new AppShell wiring, and — critically — auto-save + restore-previous-session verified by reloading mid-test and confirming the same project *and* the same open file both reopened) passed 25/25, reproduced clean on two consecutive fully-reset runs
+
+Known limitation (unchanged from Sprint 6, not addressed this sprint): still requires Python 3.11+ pre-installed; installer unsigned; AI Chat Panel/Code Editor remain architecture-only (Sprint 6 reservation, not built)
+
+Sprint 8 — Pending Approval
 
 ---
 
@@ -440,6 +464,22 @@ Sprint 1 Completed
 
 ✔ Sprint 6 Verified (tsc, eslint, prettier, vite build; pytest ×14, ruff, mypy strict; Playwright-driven Electron launch of the built app confirming the preload fix and all new features end-to-end)
 
+✔ Sprint 7 Completed — Workspace & Project Management System
+
+✔ `projects` Table Repository Implemented (`ProjectsRepository`) — `GET /projects/recent`, `POST /projects/opened`, `DELETE /projects/{id}`; `last_opened_at` column added via idempotent migration
+
+✔ New Project Wizard (`NewProjectWizard.tsx`, in-app modal) Replaces the Old Native-Save-Dialog Creation Flow
+
+✔ Workspace Manager Panel (`WorkspaceManager.tsx`) — second Sidebar panel, lists/switches/removes recent projects
+
+✔ Recent Projects Card on Dashboard (`RecentProjectsCard.tsx`)
+
+✔ Workspace Auto-Save + Restore Previous Session (`frontend/src/workspace/` — active project + open file, persisted per-project-scoped in `localStorage`)
+
+✔ `window.nemi.projects.*` IPC Namespace; `fs.selectDirectory()`/`fs.createDirectory()` Added
+
+✔ Sprint 7 Verified (tsc, eslint, prettier, vite build; pytest ×24 [10 new], ruff, mypy strict; 25-point Playwright-driven live verification — Sprint 1–6 regression + every Sprint 7 feature incl. session restore — passed 25/25, reproduced on two consecutive clean runs)
+
 ---
 
 # PENDING TASKS
@@ -462,7 +502,7 @@ Build System
 
 Python runtime bundling for packaged/distributed builds (currently assumes `python` on PATH — dev-mode only)
 
-Repositories/business logic for the remaining 7 tables (projects, tasks, files, agents, memory, settings, history) — schema exists, repositories deferred to the sprints that need them; `files` table remains intentionally unused (file content always comes from disk)
+Repositories/business logic for the remaining 6 tables (tasks, files, agents, memory, settings, history) — schema exists, repositories deferred to the sprints that need them; `projects` now has a repository (Sprint 7); `files` table remains intentionally unused (file content always comes from disk)
 
 Resizable/drag panel splitters (sidebar and logger panel are currently show/hide toggles only)
 
@@ -624,15 +664,19 @@ Windows Alpha Build 1 Completed (0.1.0-alpha.1) — electron-builder producing a
 
 Sprint 6 Completed — Fixed the Alpha-breaking preload path bug (`window.nemi` was undefined on every launch); surfaced backend stdout/stderr in the Logger Panel with a level filter; extended BackendHealth with version/uptime and a StatusBar tooltip; debounced the filesystem watcher to fix a redundant-refetch storm on bulk file operations; reserved (docs only) the AI Chat Panel and Code Editor architecture for a future sprint
 
+Sprint 7 Completed — Workspace & Project Management System: `projects` table repository implemented (`GET/POST /projects/recent|opened`, `DELETE /projects/{id}`, new `last_opened_at` column via idempotent migration); New Project Wizard (in-app modal) replaces the old native-save-dialog creation flow; Workspace Manager panel (list/switch/remove recent projects) added as a second Sidebar view; Recent Projects card added to Dashboard; workspace auto-save + restore-previous-session implemented via a new per-project-scoped `workspace/` Context+Provider+Hook module — verified via a 25-point live Playwright suite covering both full Sprint 1–6 regression and every new feature, reproduced clean twice
+
 ---
 
 # NEXT MILESTONE
 
-Sprint 7
-
-Repositories/business logic for the `projects` table — the natural next step now that projects are opened for real; would let recently-opened projects be tracked server-side instead of only in localStorage
+Sprint 8
 
 Standalone Python runtime bundling (PyInstaller or equivalent) for a Beta build — the packaging pipeline itself is now proven (Alpha Build 1), this is the remaining gap before the app runs with zero prerequisites
+
+AI Chat Panel and Code Editor implementation — architecture reserved in Sprint 6 (`docs/ARCHITECTURE.md`), ready to build against
+
+True concurrent multi-project support (simultaneous open projects, not just switching) — deliberately deferred in Sprint 7; would require a per-project filesystem watcher map and a multi-root Explorer UI
 
 AI Chat Panel and Code Editor implementation — architecture reserved in Sprint 6 (`docs/ARCHITECTURE.md`), ready to build against
 

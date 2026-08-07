@@ -30,6 +30,16 @@ declare global {
     type: ExplorerEntryType;
   }
 
+  interface ProjectRecord {
+    id: string;
+    name: string;
+    path: string;
+    description: string | null;
+    created_at: string;
+    updated_at: string;
+    last_opened_at: string | null;
+  }
+
   interface Window {
     nemi: {
       windowControls: {
@@ -44,16 +54,23 @@ declare global {
         logs: (limit?: number) => Promise<LogEntry[]>;
       };
       fs: {
-        selectProjectFolder: (mode: 'open' | 'new') => Promise<string | null>;
+        selectProjectFolder: () => Promise<string | null>;
+        selectDirectory: () => Promise<string | null>;
         openProject: (projectPath: string) => Promise<boolean>;
         closeProject: () => Promise<void>;
         listDirectory: (dirPath: string) => Promise<ExplorerEntry[]>;
         readFile: (filePath: string) => Promise<string>;
         writeFile: (filePath: string, content: string) => Promise<void>;
         createFile: (dirPath: string, name: string) => Promise<string>;
+        createDirectory: (parentPath: string, name: string) => Promise<string>;
         renameEntry: (entryPath: string, newName: string) => Promise<string>;
         deleteEntry: (entryPath: string) => Promise<void>;
         onChange: (callback: (event: { path: string }) => void) => () => void;
+      };
+      projects: {
+        listRecent: (limit?: number) => Promise<ProjectRecord[]>;
+        recordOpened: (path: string, name: string, description?: string) => Promise<ProjectRecord>;
+        remove: (id: string) => Promise<void>;
       };
     };
   }

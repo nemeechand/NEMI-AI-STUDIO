@@ -1,7 +1,7 @@
 # DATABASE_SCHEMA.md
 
-Version: 1.1
-Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4)
+Version: 1.2
+Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4); `projects` Repository Implemented (Sprint 7)
 Engine: SQLite
 
 ---
@@ -38,14 +38,15 @@ document only, produced by the Architect role.
 
 ## projects
 
-| Column      | Type | Constraints                | Notes                        |
-|-------------|------|-----------------------------|-------------------------------|
-| id          | TEXT | PRIMARY KEY                 | UUID                          |
-| name        | TEXT | NOT NULL                    |                                |
-| path        | TEXT | NOT NULL, UNIQUE            | absolute filesystem path      |
-| description | TEXT |                              | nullable                      |
-| created_at  | TEXT | NOT NULL                    |                                |
-| updated_at  | TEXT | NOT NULL                    |                                |
+| Column         | Type | Constraints                | Notes                                          |
+|----------------|------|-----------------------------|--------------------------------------------------|
+| id             | TEXT | PRIMARY KEY                 | UUID                                             |
+| name           | TEXT | NOT NULL                    |                                                   |
+| path           | TEXT | NOT NULL, UNIQUE            | absolute filesystem path                         |
+| description    | TEXT |                              | nullable                                         |
+| created_at     | TEXT | NOT NULL                    |                                                   |
+| updated_at     | TEXT | NOT NULL                    | row last mutated for any reason                  |
+| last_opened_at | TEXT |                              | nullable; drives Recent Projects ordering (Sprint 7) — deliberately distinct from `updated_at` so editing metadata without opening the project never changes its recency |
 
 ## tasks
 
@@ -161,7 +162,7 @@ agents   (standalone, referenced by tasks.agent as a name, not a FK —
 
 ---
 
-# IMPLEMENTATION STATUS (Sprint 4)
+# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7)
 
 - Schema implemented exactly as designed above:
   `backend/app/db/schema.py::SCHEMA_STATEMENTS` /  `init_db()`.
@@ -173,21 +174,35 @@ agents   (standalone, referenced by tasks.agent as a name, not a FK —
   — a context manager enabling `PRAGMA foreign_keys = ON` and
   `sqlite3.Row` access, one connection per use rather than a shared
   pool (appropriate for a single-user desktop app).
-- Repository pattern: only `LogsRepository`
-  (`backend/app/db/repositories/logs_repository.py`) exists so far —
-  `insert()` / `list_recent()`. The remaining seven tables
-  (`projects`, `tasks`, `files`, `agents`, `memory`, `settings`,
-  `history`) are schema-ready but intentionally have no repository or
-  business logic yet; those arrive with the sprints that actually
-  need them (Project Explorer, Task/Agent orchestration, Memory
-  Engine), per the Planner principle "database before business logic"
-  — the schema had to exist first, but a table being queryable
-  doesn't mean its feature is built.
+- Repository pattern: `LogsRepository`
+  (`backend/app/db/repositories/logs_repository.py`) and, as of
+  Sprint 7, `ProjectsRepository`
+  (`backend/app/db/repositories/projects_repository.py` —
+  `record_opened()` upserts by `path`, `list_recent()`, `delete()`)
+  back the `GET/POST /logs` and `GET /projects/recent`,
+  `POST /projects/opened`, `DELETE /projects/{id}` APIs respectively.
+  The remaining six tables (`tasks`, `files`, `agents`, `memory`,
+  `settings`, `history`) are still schema-ready but intentionally have
+  no repository or business logic yet; those arrive with the sprints
+  that actually need them, per the Planner principle "database before
+  business logic" — the schema had to exist first, but a table being
+  queryable doesn't mean its feature is built.
 - No ORM was introduced — plain `sqlite3` + hand-written SQL, kept
   deliberately simple for a schema this size.
-- No migration tooling was chosen; `CREATE TABLE IF NOT EXISTS` is
-  sufficient while the schema is additive-only. Revisit if a column
-  needs to change on an existing table.
+- **Migration approach revisited (Sprint 7)**: this document previously
+  said "revisit if a column needs to change on an existing table" —
+  that happened when `projects.last_opened_at` was added. Since
+  `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already
+  exists (and `projects` has existed, empty, since Sprint 4), `init_db()`
+  now also runs a small idempotent helper
+  (`schema.py::_add_column_if_missing`) that checks
+  `PRAGMA table_info(<table>)` and issues `ALTER TABLE ... ADD COLUMN`
+  only if the column is actually missing — safe to call on every
+  startup, and safe against both a fresh database and one created by
+  an earlier version of the app. Still no full migration framework;
+  this pattern is the documented approach for any future additive
+  column change, revisit again if a column ever needs to be removed or
+  changed in a way `ALTER TABLE ADD COLUMN` can't express.
 
 ---
 

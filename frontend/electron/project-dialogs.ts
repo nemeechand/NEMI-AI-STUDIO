@@ -1,25 +1,19 @@
 import { dialog, type BrowserWindow } from 'electron';
-import { promises as fs } from 'node:fs';
-import { postLog } from './backend-client';
 
-export async function selectProjectFolder(
-  window: BrowserWindow,
-  mode: 'open' | 'new',
-): Promise<string | null> {
-  if (mode === 'open') {
-    const result = await dialog.showOpenDialog(window, { properties: ['openDirectory'] });
-    if (result.canceled || result.filePaths.length === 0) return null;
-    return result.filePaths[0];
-  }
+export async function selectProjectFolder(window: BrowserWindow): Promise<string | null> {
+  const result = await dialog.showOpenDialog(window, { properties: ['openDirectory'] });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
+}
 
-  const result = await dialog.showSaveDialog(window, {
-    title: 'Create New Project',
-    buttonLabel: 'Create Project',
-    properties: ['createDirectory'],
-  });
-  if (result.canceled || !result.filePath) return null;
-
-  await fs.mkdir(result.filePath, { recursive: true });
-  postLog('INFO', 'fs.project', `Created new project folder ${result.filePath}`);
-  return result.filePath;
+/**
+ * Picks a parent directory for the New Project Wizard (name/description are
+ * entered in-app, not via a native save-dialog — see NewProjectWizard.tsx).
+ * Distinct from selectProjectFolder() to avoid overloading "pick a folder to
+ * open as a project" with "pick a folder to create a new project inside."
+ */
+export async function selectDirectory(window: BrowserWindow): Promise<string | null> {
+  const result = await dialog.showOpenDialog(window, { properties: ['openDirectory'] });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
 }

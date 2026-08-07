@@ -2,9 +2,15 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getBackendHealth, startBackend, stopBackend } from './backend-process';
-import { fetchRecentLogs } from './backend-client';
+import {
+  fetchRecentLogs,
+  fetchRecentProjects,
+  recordProjectOpened,
+  removeRecentProject,
+} from './backend-client';
 import {
   closeProject,
+  createDirectory,
   createFile,
   deleteEntry,
   listDirectory,
@@ -14,7 +20,7 @@ import {
   setChangeListener,
   writeFile,
 } from './filesystem';
-import { selectProjectFolder } from './project-dialogs';
+import { selectDirectory, selectProjectFolder } from './project-dialogs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -92,9 +98,13 @@ ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() ?? false);
 ipcMain.handle('backend:health', () => getBackendHealth());
 ipcMain.handle('backend:logs', (_event, limit?: number) => fetchRecentLogs(limit));
 
-ipcMain.handle('fs:select-project-folder', (_event, mode: 'open' | 'new') => {
+ipcMain.handle('fs:select-project-folder', () => {
   if (!mainWindow) return null;
-  return selectProjectFolder(mainWindow, mode);
+  return selectProjectFolder(mainWindow);
+});
+ipcMain.handle('fs:select-directory', () => {
+  if (!mainWindow) return null;
+  return selectDirectory(mainWindow);
 });
 ipcMain.handle('fs:open-project', (_event, projectPath: string) => openProject(projectPath));
 ipcMain.handle('fs:close-project', () => closeProject());
@@ -106,10 +116,21 @@ ipcMain.handle('fs:write-file', (_event, filePath: string, content: string) =>
 ipcMain.handle('fs:create-file', (_event, dirPath: string, name: string) =>
   createFile(dirPath, name),
 );
+ipcMain.handle('fs:create-directory', (_event, parentPath: string, name: string) =>
+  createDirectory(parentPath, name),
+);
 ipcMain.handle('fs:rename-entry', (_event, entryPath: string, newName: string) =>
   renameEntry(entryPath, newName),
 );
 ipcMain.handle('fs:delete-entry', (_event, entryPath: string) => deleteEntry(entryPath));
+
+ipcMain.handle('projects:list-recent', (_event, limit?: number) => fetchRecentProjects(limit));
+ipcMain.handle(
+  'projects:record-opened',
+  (_event, path: string, name: string, description?: string) =>
+    recordProjectOpened(path, name, description),
+);
+ipcMain.handle('projects:remove', (_event, id: string) => removeRecentProject(id));
 
 app.whenReady().then(() => {
   createMainWindow();

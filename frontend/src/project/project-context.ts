@@ -2,7 +2,7 @@ import { createContext } from 'react';
 
 export interface ProjectContextValue {
   projectPath: string | null;
-  openProject: (path: string) => Promise<void>;
+  openProject: (path: string, description?: string) => Promise<void>;
   closeProject: () => void;
 }
 

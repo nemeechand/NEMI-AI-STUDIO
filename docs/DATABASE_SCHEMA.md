@@ -1,7 +1,7 @@
 # DATABASE_SCHEMA.md
 
-Version: 1.2
-Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4); `projects` Repository Implemented (Sprint 7)
+Version: 1.3
+Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4); `projects` Repository Implemented (Sprint 7); `ai_conversations`/`ai_messages` Added and Implemented (Sprint 10)
 Engine: SQLite
 
 ---
@@ -146,6 +146,41 @@ get their own table rather than overloading this one.
 
 Append-only audit trail. Never updated or deleted by application code.
 
+## ai_conversations (Sprint 10)
+
+| Column     | Type | Constraints           | Notes                                    |
+|------------|------|--------------------------|---------------------------------------------|
+| id         | TEXT | PRIMARY KEY             |                                              |
+| project_id | TEXT | FK → projects.id        | nullable — null means a global conversation |
+| title      | TEXT | NOT NULL                | auto-generated from the first message, user-renameable |
+| provider   | TEXT | NOT NULL                | last-used provider id, e.g. "openai"        |
+| model      | TEXT | NOT NULL                | last-used model id                          |
+| created_at | TEXT | NOT NULL                |                                              |
+| updated_at | TEXT | NOT NULL                | bumped on every new message, drives conversation-list ordering |
+
+Index: `idx_ai_conversations_project_id` on `project_id`.
+
+## ai_messages (Sprint 10)
+
+| Column             | Type    | Constraints                                    | Notes                                        |
+|---------------------|---------|--------------------------------------------------|--------------------------------------------------|
+| id                  | TEXT    | PRIMARY KEY                                     |                                                    |
+| conversation_id     | TEXT    | NOT NULL, FK → ai_conversations.id              |                                                    |
+| role                | TEXT    | NOT NULL, CHECK IN ('user','assistant','system') |                                                    |
+| content             | TEXT    | NOT NULL                                        | full message text; for an in-progress streamed assistant message this is the accumulated text at persistence time |
+| provider            | TEXT    |                                                  | nullable — set for assistant messages, null for user/system |
+| model               | TEXT    |                                                  | nullable — set for assistant messages           |
+| status              | TEXT    | NOT NULL, CHECK IN ('complete','cancelled','error'), DEFAULT 'complete' | assistant messages only meaningfully vary; user/system are always 'complete' |
+| error_message       | TEXT    |                                                  | nullable, populated when status = 'error'       |
+| prompt_tokens       | INTEGER |                                                  | nullable — from the provider's usage response, when available |
+| completion_tokens   | INTEGER |                                                  | nullable                                        |
+| context_refs        | TEXT    |                                                  | nullable, JSON-encoded array of `{path, startLine?, endLine?}` — file/selection references attached to a user message, so history can re-render context chips |
+| created_at          | TEXT    | NOT NULL                                        |                                                    |
+
+Index: `idx_ai_messages_conversation_id` on `conversation_id`.
+
+**API keys are never stored here or anywhere in SQLite** (see CONVENTIONS above) — they live in Electron's OS-level `safeStorage` and are supplied per-request; the backend is stateless with respect to credentials.
+
 ---
 
 # RELATIONSHIPS
@@ -153,16 +188,18 @@ Append-only audit trail. Never updated or deleted by application code.
 ```
 projects 1---* tasks
 projects 1---* files
-projects 1---* memory   (project_id nullable)
-projects 1---* logs     (project_id nullable)
-projects 1---* history  (project_id nullable)
+projects 1---* memory           (project_id nullable)
+projects 1---* logs             (project_id nullable)
+projects 1---* history          (project_id nullable)
+projects 1---* ai_conversations (project_id nullable)
+ai_conversations 1---* ai_messages
 agents   (standalone, referenced by tasks.agent as a name, not a FK —
           keeps task history readable even if an agent is later removed)
 ```
 
 ---
 
-# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7)
+# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7, Sprint 10)
 
 - Schema implemented exactly as designed above:
   `backend/app/db/schema.py::SCHEMA_STATEMENTS` /  `init_db()`.
@@ -175,18 +212,32 @@ agents   (standalone, referenced by tasks.agent as a name, not a FK —
   `sqlite3.Row` access, one connection per use rather than a shared
   pool (appropriate for a single-user desktop app).
 - Repository pattern: `LogsRepository`
-  (`backend/app/db/repositories/logs_repository.py`) and, as of
-  Sprint 7, `ProjectsRepository`
-  (`backend/app/db/repositories/projects_repository.py` —
-  `record_opened()` upserts by `path`, `list_recent()`, `delete()`)
-  back the `GET/POST /logs` and `GET /projects/recent`,
-  `POST /projects/opened`, `DELETE /projects/{id}` APIs respectively.
-  The remaining six tables (`tasks`, `files`, `agents`, `memory`,
-  `settings`, `history`) are still schema-ready but intentionally have
-  no repository or business logic yet; those arrive with the sprints
-  that actually need them, per the Planner principle "database before
+  (`backend/app/db/repositories/logs_repository.py`), Sprint 7's
+  `ProjectsRepository` (`record_opened()` upserts by `path`,
+  `list_recent()`, `delete()`), and, as of Sprint 10,
+  `ConversationsRepository`/`MessagesRepository`
+  (`backend/app/db/repositories/ai_*.py`) back the `GET/POST /logs`,
+  `GET /projects/recent`/`POST /projects/opened`/`DELETE /projects/{id}`,
+  and `/ai/conversations*` APIs respectively. The remaining four tables
+  (`tasks`, `files`, `agents`, `settings`) plus the still-generic
+  `memory`/`history` tables are schema-ready but intentionally have no
+  repository or business logic yet; those arrive with the sprints that
+  actually need them, per the Planner principle "database before
   business logic" — the schema had to exist first, but a table being
   queryable doesn't mean its feature is built.
+- **`ai_conversations`/`ai_messages` are an intentional, justified
+  extension beyond this document's original table list (Sprint 10)**:
+  MASTER_SPECIFICATION.md's MEMORY SYSTEM section already anticipates
+  "Conversation Memory" as a first-class concept, but the generic
+  `memory` table's single JSON `value` blob is the wrong shape for an
+  ordered, per-message transcript with role/provider/model/token-count
+  metadata that needs to be queried and indexed, not deserialized on
+  every read — the same reasoning DATABASE_SCHEMA.md already applies
+  to `files` existing as its own table instead of being crammed into
+  `memory`. Two properly-normalized tables were added instead of
+  overloading `memory`, consistent with this document's own stated
+  approach of extending the schema "with the sprints that actually
+  need them."
 - No ORM was introduced — plain `sqlite3` + hand-written SQL, kept
   deliberately simple for a schema this size.
 - **Migration approach revisited (Sprint 7)**: this document previously

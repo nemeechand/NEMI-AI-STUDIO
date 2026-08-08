@@ -11,16 +11,19 @@ import { QuickOpen } from '../editor/QuickOpen';
 import { GlobalSearch } from '../search/GlobalSearch';
 import { WorkspaceManager } from '../workspace/WorkspaceManager';
 import { NewProjectWizard } from '../workspace/NewProjectWizard';
+import { ChatPanel } from '../chat/ChatPanel';
 import { CommandPalette } from '../../commands/CommandPalette';
 import { useCommand } from '../../commands/useCommand';
 import { useWorkspace } from '../../workspace/useWorkspace';
 import { useProject } from '../../project/useProject';
 import { useOpenProjectDialog } from '../../project/useOpenProjectDialog';
+import { useAi } from '../../ai/useAi';
 
 export function AppShell() {
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [sidebarPanel, setSidebarPanel] = useState<SidebarPanel>('explorer');
   const [loggerVisible, setLoggerVisible] = useState(true);
+  const [aiChatVisible, setAiChatVisible] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -29,6 +32,13 @@ export function AppShell() {
     useWorkspace();
   const { projectPath } = useProject();
   const { openExisting } = useOpenProjectDialog();
+  const { onRequestOpenPanel, newConversation } = useAi();
+
+  // Editor context-menu AI actions (Explain/Fix/.../"Ask AI about
+  // Selection") call askAboutSelection() regardless of whether the chat
+  // panel happens to be open — this makes sure it actually becomes visible
+  // when they do, rather than silently updating a hidden panel's state.
+  useEffect(() => onRequestOpenPanel(() => setAiChatVisible(true)), [onRequestOpenPanel]);
 
   const hasOpenTabs = groups.some((g) => g.tabs.length > 0);
 
@@ -61,6 +71,9 @@ export function AppShell() {
         event.preventDefault();
         setSidebarVisible(true);
         setSidebarPanel('search');
+      } else if (event.code === 'KeyA' && event.shiftKey) {
+        event.preventDefault();
+        setAiChatVisible((prev) => !prev);
       }
     }
     window.addEventListener('keydown', handleKeyDown);
@@ -96,6 +109,13 @@ export function AppShell() {
   });
   useCommand('workspace.openFolder', 'File: Open Folder…', () => void openExisting());
   useCommand('workspace.newProject', 'File: New Project…', () => setNewProjectOpen(true));
+  useCommand('ai.toggleChat', 'View: Toggle AI Chat Panel', () => setAiChatVisible((v) => !v), {
+    keybinding: 'Ctrl+Shift+A',
+  });
+  useCommand('ai.newConversation', 'AI: New Conversation', () => {
+    setAiChatVisible(true);
+    newConversation();
+  });
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-surface text-fg">
@@ -104,6 +124,8 @@ export function AppShell() {
         onToggleSidebar={() => setSidebarVisible((prev) => !prev)}
         loggerVisible={loggerVisible}
         onToggleLogger={() => setLoggerVisible((prev) => !prev)}
+        aiChatVisible={aiChatVisible}
+        onToggleAiChat={() => setAiChatVisible((prev) => !prev)}
       />
       <div className="flex min-h-0 flex-1">
         <Sidebar
@@ -148,6 +170,7 @@ export function AppShell() {
           </main>
           {loggerVisible && <LoggerPanel onClose={() => setLoggerVisible(false)} />}
         </div>
+        {aiChatVisible && <ChatPanel />}
       </div>
       <StatusBar />
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}

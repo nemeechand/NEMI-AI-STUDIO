@@ -24,6 +24,19 @@ import {
   type SearchOptions,
 } from './filesystem';
 import { selectDirectory, selectProjectFolder } from './project-dialogs';
+import { clearApiKey, getApiKey, hasApiKey, setApiKey, type ProviderId } from './ai-credentials';
+import {
+  cancelMessageStream,
+  createConversation,
+  deleteConversation,
+  listAiProviders,
+  listConversations,
+  listOllamaModels,
+  listMessages,
+  renameConversation,
+  streamMessage,
+  type AiContextRefInput,
+} from './ai-client';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -140,6 +153,51 @@ ipcMain.handle(
     recordProjectOpened(path, name, description),
 );
 ipcMain.handle('projects:remove', (_event, id: string) => removeRecentProject(id));
+
+ipcMain.handle('ai:list-providers', () => listAiProviders());
+ipcMain.handle('ai:list-ollama-models', () => listOllamaModels());
+ipcMain.handle('ai:has-api-key', (_event, provider: ProviderId) => hasApiKey(provider));
+ipcMain.handle('ai:set-api-key', (_event, provider: ProviderId, apiKey: string) =>
+  setApiKey(provider, apiKey),
+);
+ipcMain.handle('ai:clear-api-key', (_event, provider: ProviderId) => clearApiKey(provider));
+
+ipcMain.handle('ai:list-conversations', (_event, projectId: string | null) =>
+  listConversations(projectId),
+);
+ipcMain.handle(
+  'ai:create-conversation',
+  (_event, input: { projectId: string | null; title: string; provider: string; model: string }) =>
+    createConversation(input),
+);
+ipcMain.handle('ai:rename-conversation', (_event, id: string, title: string) =>
+  renameConversation(id, title),
+);
+ipcMain.handle('ai:delete-conversation', (_event, id: string) => deleteConversation(id));
+ipcMain.handle('ai:list-messages', (_event, conversationId: string) =>
+  listMessages(conversationId),
+);
+
+ipcMain.handle(
+  'ai:send-message',
+  async (
+    _event,
+    requestId: string,
+    input: {
+      conversationId: string;
+      content: string;
+      provider: string;
+      model: string;
+      contextRefs?: AiContextRefInput[];
+    },
+  ) => {
+    const apiKey = await getApiKey(input.provider as ProviderId);
+    await streamMessage(requestId, { ...input, apiKey }, (payload) => {
+      mainWindow?.webContents.send('ai:stream-event', payload);
+    });
+  },
+);
+ipcMain.handle('ai:cancel-message', (_event, requestId: string) => cancelMessageStream(requestId));
 
 app.whenReady().then(() => {
   createMainWindow();

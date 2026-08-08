@@ -7,6 +7,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from app import __version__
+from app.api.ai import router as ai_router
 from app.api.health import router as health_router
 from app.api.logs import router as logs_router
 from app.api.projects import router as projects_router
@@ -42,6 +43,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(logs_router)
     app.include_router(projects_router)
+    app.include_router(ai_router)
     register_exception_handlers(app)
     return app
 

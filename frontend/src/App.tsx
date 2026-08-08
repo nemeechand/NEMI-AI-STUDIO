@@ -1,6 +1,7 @@
 import { ThemeProvider } from './theme/ThemeProvider';
 import { ProjectProvider } from './project/ProjectProvider';
 import { WorkspaceProvider } from './workspace/WorkspaceProvider';
+import { AiProvider } from './ai/AiProvider';
 import { AppShell } from './components/layout/AppShell';
 
 function App() {
@@ -8,7 +9,9 @@ function App() {
     <ThemeProvider>
       <ProjectProvider>
         <WorkspaceProvider>
-          <AppShell />
+          <AiProvider>
+            <AppShell />
+          </AiProvider>
         </WorkspaceProvider>
       </ProjectProvider>
     </ThemeProvider>

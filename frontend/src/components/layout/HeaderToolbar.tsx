@@ -1,4 +1,4 @@
-import { PanelBottom, PanelLeft } from 'lucide-react';
+import { PanelBottom, PanelLeft, PanelRight } from 'lucide-react';
 import { IconButton } from '../common/IconButton';
 import { WindowControls } from './WindowControls';
 
@@ -7,6 +7,8 @@ interface HeaderToolbarProps {
   onToggleSidebar: () => void;
   loggerVisible: boolean;
   onToggleLogger: () => void;
+  aiChatVisible: boolean;
+  onToggleAiChat: () => void;
 }
 
 export function HeaderToolbar({
@@ -14,6 +16,8 @@ export function HeaderToolbar({
   onToggleSidebar,
   loggerVisible,
   onToggleLogger,
+  aiChatVisible,
+  onToggleAiChat,
 }: HeaderToolbarProps) {
   return (
     <header className="app-drag flex h-10 shrink-0 items-center justify-between border-b border-border bg-surface-elevated pl-3 text-sm text-fg">
@@ -24,6 +28,9 @@ export function HeaderToolbar({
         </IconButton>
         <IconButton label="Toggle Logger Panel" active={loggerVisible} onClick={onToggleLogger}>
           <PanelBottom size={16} />
+        </IconButton>
+        <IconButton label="Toggle AI Chat Panel" active={aiChatVisible} onClick={onToggleAiChat}>
+          <PanelRight size={16} />
         </IconButton>
         <div className="mx-1 h-5 w-px bg-border" />
         <WindowControls />

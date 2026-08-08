@@ -10,11 +10,94 @@ import {
   getWordWrapEnabled,
   onEditorSettingsChange,
 } from '../../settings/editorSettings';
+import { useAi } from '../../ai/useAi';
+import type { AiContextValue } from '../../ai/ai-context';
 
 const AUTO_SAVE_DEBOUNCE_MS = 1000;
 
 type MonacoNS = typeof import('monaco-editor');
 type IStandaloneCodeEditor = import('monaco-editor').editor.IStandaloneCodeEditor;
+
+interface SelectionContext {
+  content: string;
+  startLine?: number;
+  endLine?: number;
+}
+
+/** Falls back to the whole file when nothing is selected — a reasonable
+ * default for "Explain"/"Fix"/"Refactor" (there's still something concrete
+ * to act on), not an empty no-op. */
+function getSelectionContext(editor: IStandaloneCodeEditor): SelectionContext {
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+  if (model && selection && !selection.isEmpty()) {
+    return {
+      content: model.getValueInRange(selection),
+      startLine: selection.startLineNumber,
+      endLine: selection.endLineNumber,
+    };
+  }
+  return { content: model?.getValue() ?? '' };
+}
+
+interface AiEditorAction {
+  id: string;
+  label: string;
+  order: number;
+  prompt: string;
+  autoSend: boolean;
+  /** Monaco KeyCode name (e.g. 'KeyE'), combined with Ctrl+Shift+Alt below
+   * — an unusual enough chord to be very unlikely to collide with any of
+   * editor.all.js's own default bindings (e.g. plain Shift+Alt+F is
+   * "Format Document"). Also gives these actions a keyboard-accessible
+   * path beyond the right-click context menu, not just a testing
+   * convenience — real UX value for keyboard-first users. */
+  keyCode: keyof typeof import('monaco-editor').KeyCode;
+}
+
+const AI_EDITOR_ACTIONS: AiEditorAction[] = [
+  {
+    id: 'nemi.ai.askAboutSelection',
+    label: 'AI: Ask About Selection',
+    order: 1,
+    prompt: '',
+    autoSend: false,
+    keyCode: 'KeyA',
+  },
+  {
+    id: 'nemi.ai.explain',
+    label: 'AI: Explain Code',
+    order: 2,
+    prompt: 'Explain what this code does.',
+    autoSend: true,
+    keyCode: 'KeyE',
+  },
+  {
+    id: 'nemi.ai.fix',
+    label: 'AI: Fix Code',
+    order: 3,
+    prompt: 'Find and fix any bugs in this code. Explain the fix.',
+    autoSend: true,
+    keyCode: 'KeyX',
+  },
+  {
+    id: 'nemi.ai.refactor',
+    label: 'AI: Refactor Code',
+    order: 4,
+    prompt:
+      'Refactor this code to improve readability and maintainability, without changing its behavior.',
+    autoSend: true,
+    keyCode: 'KeyR',
+  },
+  {
+    id: 'nemi.ai.generate',
+    label: 'AI: Generate Code…',
+    order: 5,
+    prompt: 'Generate code that ',
+    autoSend: false,
+    keyCode: 'KeyG',
+  },
+];
 
 interface MonacoEditorPaneProps {
   groupId: EditorGroupId;
@@ -25,6 +108,15 @@ export function MonacoEditorPane({ groupId }: MonacoEditorPaneProps) {
   const { groups, setActiveTab, closeTab, closeOthers, setTabDirty, registerGroupSaveHandler } =
     useWorkspace();
   const group = groups.find((g) => g.id === groupId);
+  const { askAboutSelection } = useAi();
+  // The mount effect below only ever runs once, but askAboutSelection's
+  // identity changes whenever AiProvider's streaming state does — a ref
+  // keeps the addAction callbacks calling the current implementation
+  // instead of whatever was in scope at mount time.
+  const askAboutSelectionRef = useRef<AiContextValue['askAboutSelection']>(askAboutSelection);
+  useEffect(() => {
+    askAboutSelectionRef.current = askAboutSelection;
+  }, [askAboutSelection]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<IStandaloneCodeEditor | null>(null);
@@ -91,6 +183,34 @@ export function MonacoEditorPane({ groupId }: MonacoEditorPaneProps) {
         const path = activePathRef.current;
         if (path) closeTab(groupId, path);
       });
+
+      for (const action of AI_EDITOR_ACTIONS) {
+        editor.addAction({
+          id: action.id,
+          label: action.label,
+          contextMenuGroupId: 'nemi-ai',
+          contextMenuOrder: action.order,
+          keybindings: [
+            monaco.KeyMod.CtrlCmd |
+              monaco.KeyMod.Shift |
+              monaco.KeyMod.Alt |
+              monaco.KeyCode[action.keyCode],
+          ],
+          run: () => {
+            const path = activePathRef.current;
+            if (!path) return;
+            const { content, startLine, endLine } = getSelectionContext(editor);
+            askAboutSelectionRef.current({
+              prompt: action.prompt,
+              path,
+              content,
+              startLine,
+              endLine,
+              autoSend: action.autoSend,
+            });
+          },
+        });
+      }
 
       setReady(true);
     });

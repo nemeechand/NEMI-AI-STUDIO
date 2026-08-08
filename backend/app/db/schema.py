@@ -93,6 +93,41 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         created_at TEXT NOT NULL
     )
     """,
+    # Sprint 10: normalized conversation/message tables, distinct from the
+    # generic `memory` table's single JSON `value` blob — an ordered,
+    # per-message-metadata transcript (role, provider, model, token counts,
+    # streaming outcome) needs real columns to be queryable and indexable,
+    # not a JSON blob re-parsed on every read. See docs/DATABASE_SCHEMA.md.
+    """
+    CREATE TABLE IF NOT EXISTS ai_conversations (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id),
+        title TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_ai_conversations_project_id ON ai_conversations(project_id)",
+    """
+    CREATE TABLE IF NOT EXISTS ai_messages (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES ai_conversations(id),
+        role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+        content TEXT NOT NULL,
+        provider TEXT,
+        model TEXT,
+        status TEXT NOT NULL
+            CHECK (status IN ('complete', 'cancelled', 'error')) DEFAULT 'complete',
+        error_message TEXT,
+        prompt_tokens INTEGER,
+        completion_tokens INTEGER,
+        context_refs TEXT,
+        created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation_id ON ai_messages(conversation_id)",
 )
 
 

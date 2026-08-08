@@ -2,6 +2,14 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { BackendHealth } from './backend-process';
 import type { LogEntry, ProjectRecord } from './backend-client';
 import type { ExplorerEntry, SearchMatch, SearchOptions } from './filesystem';
+import type { ProviderId } from './ai-credentials';
+import type {
+  AiConversation,
+  AiContextRefInput,
+  AiMessage,
+  AiProviderInfo,
+  StreamEventPayload,
+} from './ai-client';
 
 const backend = {
   health: (): Promise<BackendHealth> => ipcRenderer.invoke('backend:health'),
@@ -50,6 +58,51 @@ const projects = {
   remove: (id: string): Promise<void> => ipcRenderer.invoke('projects:remove', id),
 };
 
+const aiApi = {
+  listProviders: (): Promise<AiProviderInfo[]> => ipcRenderer.invoke('ai:list-providers'),
+  listOllamaModels: (): Promise<string[]> => ipcRenderer.invoke('ai:list-ollama-models'),
+  hasApiKey: (provider: ProviderId): Promise<boolean> =>
+    ipcRenderer.invoke('ai:has-api-key', provider),
+  setApiKey: (provider: ProviderId, apiKey: string): Promise<void> =>
+    ipcRenderer.invoke('ai:set-api-key', provider, apiKey),
+  clearApiKey: (provider: ProviderId): Promise<void> =>
+    ipcRenderer.invoke('ai:clear-api-key', provider),
+
+  listConversations: (projectId: string | null): Promise<AiConversation[]> =>
+    ipcRenderer.invoke('ai:list-conversations', projectId),
+  createConversation: (input: {
+    projectId: string | null;
+    title: string;
+    provider: string;
+    model: string;
+  }): Promise<AiConversation> => ipcRenderer.invoke('ai:create-conversation', input),
+  renameConversation: (id: string, title: string): Promise<AiConversation> =>
+    ipcRenderer.invoke('ai:rename-conversation', id, title),
+  deleteConversation: (id: string): Promise<void> =>
+    ipcRenderer.invoke('ai:delete-conversation', id),
+  listMessages: (conversationId: string): Promise<AiMessage[]> =>
+    ipcRenderer.invoke('ai:list-messages', conversationId),
+
+  sendMessage: (
+    requestId: string,
+    input: {
+      conversationId: string;
+      content: string;
+      provider: string;
+      model: string;
+      contextRefs?: AiContextRefInput[];
+    },
+  ): Promise<void> => ipcRenderer.invoke('ai:send-message', requestId, input),
+  cancelMessage: (requestId: string): Promise<boolean> =>
+    ipcRenderer.invoke('ai:cancel-message', requestId),
+  onStreamEvent: (callback: (payload: StreamEventPayload) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: StreamEventPayload) =>
+      callback(payload);
+    ipcRenderer.on('ai:stream-event', listener);
+    return () => ipcRenderer.removeListener('ai:stream-event', listener);
+  },
+};
+
 const windowControls = {
   minimize: () => ipcRenderer.invoke('window:minimize'),
   maximizeToggle: () => ipcRenderer.invoke('window:maximize-toggle'),
@@ -63,4 +116,10 @@ const windowControls = {
   },
 };
 
-contextBridge.exposeInMainWorld('nemi', { windowControls, backend, fs: fsApi, projects });
+contextBridge.exposeInMainWorld('nemi', {
+  windowControls,
+  backend,
+  fs: fsApi,
+  projects,
+  ai: aiApi,
+});

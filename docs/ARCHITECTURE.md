@@ -1,8 +1,8 @@
 # ARCHITECTURE.md
 
-Version: 1.6
-Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8)
-Governs: Sprint 9 onward
+Version: 1.7
+Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8); Monaco Code Editor Locked (Sprint 9); AI Chat & Agent Framework Locked (Sprint 10)
+Governs: Sprint 10 onward
 
 ---
 
@@ -38,16 +38,21 @@ Location: `frontend/src`
 - `components/search/` (Sprint 9) — Global Search Sidebar panel.
 - `commands/` (Sprint 9) — Command Palette registry and `useCommand()`
   hook; see MONACO CODE EDITOR below.
+- `components/chat/` (Sprint 10) — `ChatPanel.tsx`, `MessageList.tsx`,
+  `MessageBubble.tsx`, `MarkdownLite.tsx`, `ChatInput.tsx`,
+  `ProviderSelector.tsx`, `TokenUsageIndicator.tsx`,
+  `ConversationHistoryList.tsx`; see AI CHAT & AGENT FRAMEWORK below.
 - `components/common/` — shared, reusable, presentation-only primitives
   (e.g. `IconButton`). A component belongs here only if it has no
   feature-specific knowledge.
-- `theme/`, `project/`, `workspace/`, `settings/` — cross-cutting
-  frontend state (Theme Manager, active-project state, workspace/
-  session persistence, and Sprint 9's editor settings respectively),
-  each following the Context+Provider+Hook pattern (see STATE
-  MANAGEMENT PATTERN below) — except `settings/editorSettings.ts`,
-  which is a plain `localStorage`-backed module with a pub-sub
-  listener rather than a Context, since it has no component-tree
+- `theme/`, `project/`, `workspace/`, `settings/`, `ai/` (Sprint 10) —
+  cross-cutting frontend state (Theme Manager, active-project state,
+  workspace/session persistence, editor settings, and AI chat/
+  conversation state respectively), each following the
+  Context+Provider+Hook pattern (see STATE MANAGEMENT PATTERN below)
+  — except `settings/editorSettings.ts`, which is a plain
+  `localStorage`-backed module with a pub-sub listener rather than a
+  Context, since it has no component-tree
   scoping need (see MONACO CODE EDITOR below).
 
 Rule: components read data through props or hooks only. No component
@@ -71,17 +76,25 @@ embedded inside a React component.
 
 ## AI Layer
 
-Not yet implemented. Reserved for provider adapters (Claude, OpenAI,
-Gemini, DeepSeek, Qwen, Ollama per TECH_STACK.md), the memory system
-(see MASTER_SPECIFICATION.md → MEMORY SYSTEM), and the agent
-implementations that operationalize `agents/*.md`.
+As of Sprint 10, provider adapters for OpenAI, Claude (Anthropic), and
+Gemini are implemented (`backend/app/ai/providers/`), plus Ollama for
+local/offline models — see AI CHAT & AGENT FRAMEWORK below. DeepSeek
+and Qwen (also listed as candidates in TECH_STACK.md) are not
+implemented — outside this sprint's explicit scope, and the same
+`AIProvider` abstraction accommodates adding either later without
+touching the four already built. The MEMORY SYSTEM
+(MASTER_SPECIFICATION.md) beyond conversation history, and the agent
+implementations that operationalize `agents/*.md` (Planner → Developer
+→ Reviewer → Tester orchestration), remain not yet implemented —
+Sprint 10 delivers the chat/provider/context foundation those would
+run on top of, not the agents themselves.
 
-Locked in Sprint 4: AI provider calls will be made from the Python
-backend, never proxied through or exposed to the renderer. This
-follows directly from the Security Rules ("never expose secrets", "no
-secrets inside source code") and from the transport decision below —
-the backend is already the sole owner of anything that talks to the
-outside world.
+Locked in Sprint 4, upheld by Sprint 10's design: AI provider calls
+are made from the Python backend, never proxied through or exposed to
+the renderer. This follows directly from the Security Rules ("never
+expose secrets", "no secrets inside source code") and from the
+transport decision below — the backend is already the sole owner of
+anything that talks to the outside world.
 
 ## Data Layer
 
@@ -91,11 +104,14 @@ outside world.
 - SQLite — see `docs/DATABASE_SCHEMA.md` for the finalized table
   design. As of Sprint 4 the schema is created automatically at
   backend startup (`app/db/schema.py::init_db`) into
-  `database/nemi.db`. `logs` (`GET/POST /logs`, Sprint 5) and, as of
-  Sprint 7, `projects` (`GET /projects/recent`, `POST /projects/opened`,
-  `DELETE /projects/{id}`) have repositories — the other six tables
-  are schema-ready but have no repository/business logic yet,
-  intentionally deferred to the sprints that need them.
+  `database/nemi.db`. `logs` (`GET/POST /logs`, Sprint 5), `projects`
+  (Sprint 7: `GET /projects/recent`, `POST /projects/opened`,
+  `DELETE /projects/{id}`), and, as of Sprint 10, `ai_conversations`/
+  `ai_messages` (`/ai/conversations*` — see AI CHAT & AGENT FRAMEWORK
+  below) have repositories — the remaining four tables (`tasks`,
+  `files`, `agents`, `settings`) are schema-ready but have no
+  repository/business logic yet, intentionally deferred to the
+  sprints that need them.
 - Filesystem — as of Sprint 5, real project files on disk. Ownership
   is Electron main, not the Python backend; see FILESYSTEM OWNERSHIP
   below. The `files` SQLite table remains unused (no repository) —
@@ -127,20 +143,24 @@ Three processes, already implemented and hardened in Sprint 2:
 ## IPC Boundary (locked decision)
 
 All renderer → native calls go through `window.nemi`
-(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 9
-this surface has four namespaces: `windowControls` (Sprint 2),
+(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 10
+this surface has five namespaces: `windowControls` (Sprint 2),
 `backend` (Sprint 4: `health()`; Sprint 5: `logs()`), `fs`
 (Sprint 5: project/file CRUD + change notifications; Sprint 7:
 `selectDirectory()`, `createDirectory()`; Sprint 9: `listAllFiles()`
 for Quick Open, `searchInFiles()` for Global Search — same ownership
-as the rest of `fs`, see FILESYSTEM OWNERSHIP below), and `projects`
-(Sprint 7: `listRecent()`, `recordOpened()`, `remove()`). Future
-database or AI-agent triggers must be added here first, as a typed
-method, before any component may call them. A component must never
-assume Node.js globals exist. All ambient types shared across
-`window.nemi` methods (`ExplorerEntry`, `LogEntry`, `BackendHealth`,
-`ProjectRecord`, `SearchMatch`, `SearchOptions`, etc.) live inside the
-`declare global` block of `electron-api.d.ts` so they're usable
+as the rest of `fs`, see FILESYSTEM OWNERSHIP below), `projects`
+(Sprint 7: `listRecent()`, `recordOpened()`, `remove()`), and `ai`
+(Sprint 10: `listProviders()`, `listOllamaModels()`, `hasApiKey()`/
+`setApiKey()`/`clearApiKey()`, `listConversations()`/
+`createConversation()`/`renameConversation()`/`deleteConversation()`/
+`listMessages()`, `sendMessage()`/`cancelMessage()`/`onStreamEvent()`
+— see AI CHAT & AGENT FRAMEWORK below). A component must never assume
+Node.js globals exist. All ambient types shared across `window.nemi`
+methods (`ExplorerEntry`, `LogEntry`, `BackendHealth`, `ProjectRecord`,
+`SearchMatch`, `SearchOptions`, `AiProviderInfo`, `AiConversation`,
+`AiMessage`, `AiContextRef`, `AiStreamEventPayload`, etc.) live inside
+the `declare global` block of `electron-api.d.ts` so they're usable
 anywhere in the renderer without imports.
 
 The renderer never talks to the backend HTTP API directly — it has no
@@ -459,35 +479,148 @@ state.
 
 ---
 
-# AI CHAT PANEL (reserved — Sprint 6, not implemented)
+# AI CHAT & AGENT FRAMEWORK (locked decision — Sprint 10)
 
-This is a documentation-only reservation prepared during Sprint 6's
-stabilization work, so a future sprint has a locked starting point
-instead of an open decision. No code, folders, or IPC channels from
-this section exist yet — writing them without a use case would violate
-`agents/architect.md`'s "never create temporary solutions." The Code
-Editor half of this original reservation was resolved in Sprint 9 (see
-MONACO CODE EDITOR below); only the AI Chat Panel remains reserved.
+Resolves the AI Chat Panel half of Sprint 6's AI CHAT PANEL & CODE
+EDITOR reservation (the Code Editor half was resolved in Sprint 9 —
+see MONACO CODE EDITOR below). Implements the AI Layer from
+MASTER_SPECIFICATION's APPLICATION LAYERS: `frontend/src/ai/` (state),
+`frontend/src/components/chat/` (UI), `backend/app/ai/` (providers).
 
-**AI Chat Panel**
+**Provider abstraction — `backend/app/ai/providers/`.** One
+`AIProvider` per backend (`OpenAIProvider`, `AnthropicProvider`,
+`GeminiProvider`, `OllamaProvider`), each implementing a single
+`stream_chat()` that normalizes its own SDK's streaming shape into two
+event types (`StreamChunk`, then exactly one `StreamDone` carrying
+whatever usage the provider reported) so `api/ai.py` never needs to
+know which provider it's talking to. SDK exceptions are caught and
+re-raised as `app.ai.errors.ProviderError` subclasses
+(`AuthenticationError`, `RateLimitError`, `InvalidRequestError`,
+`ProviderNetworkError`, `MissingApiKeyError`) — normalized error codes
+regardless of which SDK actually failed. `OpenAIProvider`/
+`AnthropicProvider`/`GeminiProvider` use each vendor's official async
+SDK (`openai`, `anthropic`, `google-genai`); `OllamaProvider` talks
+directly to the user's local Ollama server's `/api/chat` (newline-
+delimited JSON) via `httpx` — no SDK exists or is needed for a local
+HTTP server, and it's the one provider that needs no API key at all.
 
-- UI: `frontend/src/components/chat/` — a new sibling to
-  `components/explorer/`, `components/logger/`, `components/dashboard/`.
-- State: `frontend/src/ai/` following the exact Context+Provider+Hook
-  three-file pattern locked under STATE MANAGEMENT PATTERN above
-  (`ai-context.ts` / `AiProvider.tsx` / `useAi.ts`), matching how
-  `theme/` and `project/` are already structured.
-- IPC: a future `window.nemi.ai.*` namespace, added to
-  `electron-api.d.ts` the same way `backend` and `fs` were — the
-  renderer will still never call the backend HTTP API directly (see IPC
-  Boundary above). Chat responses will need streaming; the backend
-  framework decision in Sprint 4 already anticipated this ("a
-  straightforward path to streaming (SSE) responses once AI provider
-  calls are added"), so the transport question is already answered —
-  only the endpoint and IPC plumbing remain to be built.
-- Provider secrets: per the AI Layer section above, AI provider calls
-  and their credentials live in `backend/app`, never the renderer —
-  already locked in Sprint 4, unaffected by this reservation.
+**API keys are never stored server-side, matching DATABASE_SCHEMA.md's
+existing "no column stores secrets" convention.** They're encrypted
+with Electron's `safeStorage` (Windows DPAPI / macOS Keychain / Linux
+Secret Service — OS-level, not app-rolled crypto) and persisted only
+as an encrypted blob in `app.getPath('userData')/ai-credentials.json`
+(`frontend/electron/ai-credentials.ts`) — never in the repo, never in
+SQLite. The renderer never sees a raw key: it can only ask "is this
+provider configured" (`window.nemi.ai.hasApiKey`) or ask Electron main
+to save/clear one. When a message is sent, Electron main decrypts the
+relevant key in-memory and attaches it to that one HTTP request to the
+backend (`api_key` in the JSON body, over the same trusted
+localhost-only connection every other backend call already uses) — the
+backend uses it to call the provider and never persists it anywhere.
+This keeps "AI provider calls and their credentials live in
+backend/app" (the Sprint 4 locked decision) true in the sense that
+matters — the credential only ever becomes live/usable inside
+`backend/app`'s process boundary when making a call — without
+requiring the backend to be a secrets store, which the schema
+convention explicitly forbids.
+
+**Conversation persistence — `ai_conversations`/`ai_messages` tables**
+(new, added to the schema this sprint — see DATABASE_SCHEMA.md for the
+full column list and the rationale for why these are normalized
+tables rather than overloading the generic `memory` table).
+`ConversationsRepository`/`MessagesRepository`
+(`backend/app/db/repositories/ai_*.py`) back `backend/app/api/ai.py`'s
+CRUD endpoints. Conversations are scoped by `project_id` — nullable,
+matching every other project-scoped table — giving "context-aware
+chat using the active workspace": `frontend/src/ai/AiProvider.tsx`
+refetches the conversation list whenever the active project changes,
+the same per-project-scoping principle Sprint 7's workspace state and
+Sprint 9's tab/session state already established.
+
+**Streaming transport: Server-Sent Events, exactly as anticipated in
+Sprint 4's framework decision.** `POST /ai/conversations/{id}/messages/
+stream` returns a `StreamingResponse` (`text/event-stream`) with
+`chunk`/`usage`/`error`/`done` events. The renderer cannot reach this
+directly (no network access, per the locked IPC Boundary below) — the
+relay pattern is: renderer calls `window.nemi.ai.sendMessage(requestId,
+...)` → Electron main (`frontend/electron/ai-client.ts`) performs the
+actual `fetch()` to the backend and re-emits each parsed SSE frame as
+an `ai:stream-event` push event via `webContents.send()` — the same
+event-push shape the app already uses for `fs:changed` and
+`window:maximized-change`, not a new pattern. The renderer's
+`sendMessage()` IPC call itself resolves only once the whole stream
+ends; live progress arrives entirely through the push channel.
+
+**Cancellation.** `window.nemi.ai.cancelMessage(requestId)` aborts an
+`AbortController` Electron main keeps per in-flight request, which
+tears down the `fetch()` to the backend. Server-side, the streaming
+generator's persistence step lives in a `finally` block, not after its
+`try`, specifically because a client disconnect that lands *before*
+the first provider chunk arrives (confirmed live against a fast local
+Ollama model) delivers `GeneratorExit` at that suspension point —
+skipping straight past the loop's own `is_disconnected()` check, which
+only ever runs between two already-yielded chunks. The `finally` block
+re-checks disconnection state unconditionally before persisting, so a
+cancelled response is always saved with `status='cancelled'` and
+whatever partial content had streamed in, never silently recorded as
+if it had completed normally.
+
+**Context-aware chat / file references / "Code selection → Ask AI" —
+all funnel through one function, `AiContextValue.askAboutSelection()`.**
+A user-attached file (`@file` in the chat input, fuzzy-filtered via
+the same `fuzzyFilter` Quick Open already uses against
+`window.nemi.fs.listAllFiles()`) and a Monaco selection both become
+the same `PendingAttachment` shape (`path`, `content`, optional
+`startLine`/`endLine`), persisted alongside the user's message as
+`context_refs` (JSON) so history re-renders the same attachment chips
+later. "Project indexing" is this file-tree/manifest lookup — real and
+live (backed by Sprint 9's already-built `listAllFiles`), not a fake
+placeholder — deliberately not a semantic/embedding-based vector index,
+which would need its own embedding-model + vector-store infrastructure
+disproportionate to this sprint; a natural candidate for a future
+sprint, not fabricated now.
+
+**Editor AI actions — `frontend/src/components/editor/
+MonacoEditorPane.tsx`.** Five actions (Ask About Selection, Explain,
+Fix, Refactor, Generate) registered via `editor.addAction()`, each
+falling back to the whole file when nothing is selected. Each also
+gets an explicit keybinding (`Ctrl+Shift+Alt+<letter>` — an unusual
+enough chord to avoid colliding with any of `editor.all.js`'s own
+default bindings, e.g. `Shift+Alt+F` is already "Format Document"),
+not only a context-menu entry: real keyboard-accessible UX value, and
+also the reliable, automatable trigger path used for live verification
+— Monaco's right-click context menu is a canvas/DOM-overlay hybrid
+that, confirmed during this sprint's testing, Playwright cannot
+reliably trigger (neither a real right-click at exact rendered-line
+coordinates nor Monaco's own F1 Quick Command opened anything in this
+Electron build) — the same category of interaction-automation
+limitation already documented for Monaco in Sprint 9, not a new gap
+introduced here.
+
+**Token usage** is tracked per assistant message
+(`prompt_tokens`/`completion_tokens`, from whatever the provider's
+final stream event reports) and summed per conversation for the
+indicator in the Chat Panel header — real provider-reported numbers,
+never estimated/fabricated.
+
+**Error handling.** `ProviderError` extends the existing `NemiError`
+base (Sprint 4's locked global-exception-handler pattern) for
+consistency if it ever escapes the streaming generator's own
+try/except, though in normal operation it's always caught there and
+translated into an SSE `error` event instead. A missing API key,
+an unreachable Ollama server, an invalid model, and a provider's own
+4xx/5xx responses are all normalized into the same
+`{code, message}` shape and rendered as a visible, dismissable error
+in the Chat Panel — never a silent failure or a raw stack trace.
+
+**Explicitly out of scope**, stated up front rather than discovered
+late: semantic/embedding-based project indexing (see above); tool use
+/ function calling (the provider abstraction's `stream_chat()`
+signature doesn't take a tools parameter yet); multi-agent
+orchestration (Planner/Developer/Reviewer/etc. from
+MASTER_SPECIFICATION's AI AGENTS section) — this sprint delivers the
+chat/provider/context foundation those agents would eventually run on
+top of, not the agents themselves.
 
 ---
 
@@ -709,6 +842,42 @@ must never run with Node.js integration in the renderer.
     case depends on whether Shift was actually applied by the browser,
     which real keypresses and synthetic test input do not always agree
     on; `event.code` is layout/shift/case-independent.
+22. **(Sprint 10)** AI provider API keys are encrypted with Electron's
+    `safeStorage` and persisted only in `app.getPath('userData')`,
+    never in SQLite (upholds DATABASE_SCHEMA.md's existing "no column
+    stores secrets" convention) and never in the repo. The backend
+    receives a key only as part of the one request that needs it and
+    never persists it.
+23. **(Sprint 10)** `ai_conversations`/`ai_messages` are normalized
+    tables, not entries in the generic `memory` table — see
+    DATABASE_SCHEMA.md for the full rationale (an ordered,
+    per-message-metadata transcript needs real columns to be queryable
+    and indexable, the same reasoning that already justified `files`
+    existing as its own table).
+24. **(Sprint 10)** AI chat streaming uses Server-Sent Events end to
+    end: FastAPI `StreamingResponse` on the backend, relayed by
+    Electron main into `webContents.send()` push events on the
+    existing `fs:changed`/`window:maximized-change` pattern — not a
+    new IPC shape.
+25. **(Sprint 10)** Cancellation persistence happens in a `finally`
+    block, not after the streaming loop's `try` — a disconnect that
+    lands before the first provider chunk arrives delivers
+    `GeneratorExit` at that suspension point, skipping past the loop's
+    own `is_disconnected()` check entirely; only a `finally`-level
+    check reliably catches that case.
+26. **(Sprint 10)** "Project indexing" is the existing Sprint 9
+    file-tree/manifest lookup (`listAllFiles`), reused for `@file`
+    references and editor-selection context — not a semantic/
+    embedding-based vector index, which would need its own
+    infrastructure disproportionate to this sprint.
+27. **(Sprint 10)** Monaco's right-click context menu cannot be
+    reliably automated by Playwright in this Electron build (confirmed
+    live — neither a real right-click at exact coordinates nor F1's
+    Quick Command opened anything), the same category of limitation
+    already documented for Monaco in Sprint 9. The five AI editor
+    actions therefore also get explicit keybindings
+    (`Ctrl+Shift+Alt+<letter>`), which are both genuine keyboard-
+    accessible UX and the actual path live verification exercises.
 
 ---
 

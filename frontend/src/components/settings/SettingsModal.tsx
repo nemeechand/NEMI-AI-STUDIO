@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { useTheme } from '../../theme/useTheme';
 import { IconButton } from '../common/IconButton';
+import { AiProviderSettings } from './AiProviderSettings';
 import {
   getAutoSaveEnabled,
   getWordWrapEnabled,
@@ -34,16 +35,16 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md rounded-lg border border-border bg-surface-elevated shadow-xl"
+        className="flex max-h-[85vh] w-full max-w-md flex-col rounded-lg border border-border bg-surface-elevated shadow-xl"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
           <h2 className="text-sm font-semibold text-fg">Settings</h2>
           <IconButton label="Close Settings" onClick={onClose}>
             <X size={16} />
           </IconButton>
         </div>
-        <div className="space-y-4 px-4 py-4">
+        <div className="space-y-4 overflow-y-auto px-4 py-4">
           <div>
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-fg-muted">
               Appearance
@@ -101,6 +102,9 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                 />
               </label>
             </div>
+          </div>
+          <div>
+            <AiProviderSettings />
           </div>
           <div>
             <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-fg-muted">

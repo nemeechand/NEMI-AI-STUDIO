@@ -370,6 +370,28 @@ Verified: tsc build, eslint (0 warnings), prettier (clean, `release/` added to `
 
 Known limitation: Monaco renders through its own internal canvas-backed event handling, so a few interaction classes (precise multi-cursor via Alt+Click, drag-based UI) were verified through Monaco's own API/model state rather than synthetic pixel-level DOM events — consistent with this project's practice of stating verification boundaries honestly. AI Chat Panel remains architecture-only (Sprint 6 reservation, not built). Code-signing certificate for the installer remains the top Beta blocker, unaffected by this sprint.
 
+Sprint 10 — Completed (AI Chat & Agent Framework)
+
+Goal:
+
+Implement the AI layer reserved since Sprint 6: an AI Chat Panel (right sidebar) with streaming responses, conversation history, a real four-provider abstraction (OpenAI, Claude/Anthropic, Gemini, Ollama — no mock providers), context-aware chat using the active workspace, project indexing, file references, code-selection-to-Ask-AI, Explain/Fix/Generate/Refactor Code, AI actions from the editor context menu, a token usage indicator, cancellation support, error handling, and conversation persistence — without breaking Sprints 1–9, with full regression testing.
+
+Delivered:
+
+Backend: `backend/app/ai/` — `AIProvider` abstraction with one real SDK-backed implementation per provider (`openai`, `anthropic`, `google-genai` official SDKs; Ollama via `httpx` against its local `/api/chat`, no SDK needed since it's a local server) normalizing each provider's own streaming shape into `StreamChunk`/`StreamDone` events and SDK exceptions into shared `ProviderError` subclasses. New `ai_conversations`/`ai_messages` tables (normalized, not shoehorned into the generic `memory` table — see docs/DATABASE_SCHEMA.md) with `ConversationsRepository`/`MessagesRepository`. New `backend/app/api/ai.py`: provider list, Ollama live model list, conversation CRUD, and a Server-Sent-Events streaming endpoint that persists both the user message and the assistant's response (or partial response, on cancellation) every time, never just on success.
+
+Electron: API keys are encrypted with `safeStorage` and persisted only in `app.getPath('userData')` — never in SQLite (upholds the pre-existing "no column stores secrets" convention in docs/DATABASE_SCHEMA.md) and never sent anywhere except attached to the one backend request that needs it, which never persists it. New `window.nemi.ai.*` IPC namespace (provider/key management, conversation CRUD, streaming send/cancel) with streaming relayed as `ai:stream-event` push events, the same pattern `fs:changed` already established.
+
+Frontend: new `ai/` Context+Provider+Hook module and `components/chat/` (Chat Panel, message list with a dependency-free Markdown-lite renderer for code blocks, provider/model selector, token usage indicator, conversation history, chat input with `@file` fuzzy-reference picker built on Sprint 9's `listAllFiles`). AI Chat Panel added as a new right-sidebar region in `AppShell.tsx`. Five AI actions registered on the Monaco editor via `editor.addAction()` (Ask About Selection, Explain, Fix, Refactor, Generate), each also bound to an explicit keybinding. Settings modal gained an AI Providers section for key entry/removal. `ProjectContext` extended with `projectId` (the database UUID, previously only `projectPath` was exposed) so conversations can be scoped by the real foreign key.
+
+Found and fixed four real bugs during live verification, each caught by testing against a real locally-installed Ollama model (deliberately installed this sprint specifically to have at least one provider testable end-to-end without needing a paid API key) rather than any mock: (1) the initial provider/conversation list fetch on app launch had no retry, so it permanently lost the race against the backend's own startup time on a fresh launch, leaving the provider dropdown empty for the whole session — fixed with a bounded retry matching the backend's own startup timeout. (2) Cancelling a request before its first chunk arrived left the persisted message as `status: complete` with empty content instead of `cancelled`, because a disconnect at that exact point delivers `GeneratorExit` past the streaming loop's own disconnect check — fixed by re-checking disconnection state in a `finally` block that always runs. (3) Ollama has no hardcoded default model (unlike the cloud providers), so a fresh session's `selectedModel` started empty and any send silently failed a 422 validation error with no visible feedback — fixed by auto-selecting the first locally-available model once the real list loads, plus wrapping the whole send flow in proper error handling so any remaining failure surfaces visibly instead of becoming an unhandled rejection. (4) Monaco's right-click context menu could not be reliably automated by Playwright in this Electron build (confirmed, not assumed — neither a real right-click at exact rendered coordinates nor Monaco's own F1 Quick Command opened anything), the same category of limitation already documented for Monaco in Sprint 9 — worked around by giving the five AI editor actions real keybindings, which are both genuine keyboard-accessible UX and a reliably automatable verification path.
+
+docs/ARCHITECTURE.md gained a new "AI CHAT & AGENT FRAMEWORK (locked — Sprint 10)" section resolving the AI Chat Panel half of Sprint 6's reservation, the IPC namespace and Presentation Layer component lists updated, six new locked-decision entries; docs/DATABASE_SCHEMA.md updated with the two new tables and their justification; docs/SPRINT_10_REPORT.md created.
+
+Verified: tsc build, eslint (0 warnings), prettier (clean), vite build; pytest (37 passed, 13 new — including a live end-to-end test against the real local Ollama model, skipped gracefully if Ollama isn't present rather than mocked), ruff check (all checks passed), mypy strict (0 issues, 40 source files). Live Playwright verification across three suites plus a full Sprint 1–9 regression pass, every suite reproduced clean on at least two consecutive fully-reset runs: a 14-point core AI suite (real streaming against a live local model, cancellation, token usage, conversation history, persistence across reload, graceful missing-key error); a 14-point secondary suite (Settings key save/clear round-tripping through real `safeStorage` encryption, editor AI action keybinding triggering a real auto-sent request with file context attached, `@file` reference picker and attachment); an 18-point full Sprint 1–9 regression (StatusBar, Logger, Explorer, Workspace Manager, Monaco open/multi-tab/save/split/highlighting, Quick Open, Command Palette, Global Search, all coexisting correctly with the new AI Chat Panel).
+
+Known limitation: only Ollama could be exercised with genuine live network calls in this environment (no OpenAI/Anthropic/Gemini API keys available) — those three providers' request/response mapping and error-normalization logic is implemented against each SDK's actual installed API surface (verified by inspection, not memory) and covered by non-network unit tests (e.g. the real `MissingApiKeyError` path), but a live call to each cloud provider has not been performed, stated honestly rather than overclaimed. Multi-agent orchestration (Planner/Developer/Reviewer/etc.) and semantic/embedding-based project indexing remain explicitly out of scope, not fabricated. Code-signing certificate for the installer remains the top Beta blocker, unaffected by this sprint.
+
 ---
 
 # CURRENT STATUS
@@ -544,11 +566,21 @@ Sprint 1 Completed
 
 ✔ Sprint 9 Verified (tsc, eslint, prettier, vite build; pytest ×24 unchanged, ruff, mypy strict; 4 live Playwright suites — 16-point core, 17-point extended, 10-point Sprint 1–8 regression, 5-point packaged-app spot-check — each reproduced clean twice)
 
+✔ Sprint 10 Completed — AI Chat & Agent Framework
+
+✔ AI Chat Panel Implemented (right sidebar) — real four-provider abstraction (OpenAI, Claude/Anthropic, Gemini, Ollama, no mocks), streaming responses (SSE end to end), conversation history and persistence, context-aware chat scoped to the active project, `@file` references, code-selection-to-Ask-AI, Explain/Fix/Generate/Refactor Code editor actions with keybindings, token usage indicator, cancellation, and graceful error handling
+
+✔ API Keys Encrypted via Electron `safeStorage`, Never Stored in SQLite — upholds the existing "no column stores secrets" convention; keys attached only to the one backend request that needs them, never persisted server-side
+
+✔ Found and Fixed Four Real Bugs During Live Verification (against a real locally-installed Ollama model, installed this sprint specifically for genuine non-mocked testing) — provider/conversation list fetch had no startup retry and could permanently fail on a fresh launch; cancelling before the first stream chunk persisted an empty "complete" message instead of "cancelled"; sending with no Ollama model chosen failed a 422 silently; Monaco's right-click context menu can't be reliably automated by Playwright in this Electron build (worked around with real keybindings on all five AI actions)
+
+✔ Sprint 10 Verified (tsc, eslint, prettier, vite build; pytest ×37 [13 new, incl. a live Ollama end-to-end test], ruff, mypy strict; 4 live Playwright suites — 14-point core AI, 14-point secondary (Settings/editor actions/file refs), 18-point full Sprint 1–9 regression, 6-point packaged-app spot-check — each reproduced clean at least twice)
+
 ---
 
 # PENDING TASKS
 
-Code-signing certificate for the installer (currently unsigned) — top remaining Beta blocker, unaffected by Sprint 9
+Code-signing certificate for the installer (currently unsigned) — top remaining Beta blocker, unaffected by Sprint 10
 
 Workflow Design
 
@@ -728,19 +760,19 @@ Sprint 8 Completed — Standalone Python Runtime Bundling: backend bundled via P
 
 Sprint 9 Completed — Professional Monaco Code Editor: `FileEditor.tsx`'s plain `<textarea>` replaced by a full Monaco-based multi-tab editor (bundled locally, scoped + lazy-loaded imports, offline-first) — tabs, dirty indicators, Save All, Close/Close Others/Reopen Closed Tab, bounded Split Editor (2 groups), Quick Open, Global Search, Command Palette, Auto Save toggle, and syntax highlighting for all 9 required languages; found and fixed three real bugs during live verification (missing `basic-languages` imports killed JS/TS/CSS/HTML highlighting and the TS worker, Windows URI drive-letter lowercasing broke Ctrl+S/Ctrl+W, case-sensitive `event.key` checks broke Ctrl+Shift+P/F on a real keyboard) — verified via 4 live Playwright suites (core, extended, Sprint 1–8 regression, packaged-app spot-check) plus the full offline suite, each live suite reproduced clean twice; resolves the Code Editor half of Sprint 6's AI Chat Panel & Code Editor reservation
 
+Sprint 10 Completed — AI Chat & Agent Framework: implements the AI layer reserved since Sprint 6 — AI Chat Panel (right sidebar) with a real four-provider abstraction (OpenAI, Claude/Anthropic, Gemini, Ollama, no mocks), SSE streaming end to end, conversation persistence scoped to the active project, `@file` references, code-selection-to-Ask-AI, Explain/Fix/Generate/Refactor Code editor actions with keybindings, token usage, cancellation, and graceful error handling; API keys encrypted via Electron `safeStorage`, never stored server-side; found and fixed four real bugs during live verification against a real locally-installed Ollama model (provider-list startup race, cancellation-before-first-chunk persisting the wrong status, an empty-model silent failure, and Monaco's context menu being unautomatable by Playwright — worked around with real keybindings) — verified via 4 live Playwright suites plus the full offline suite, each live suite reproduced clean at least twice; resolves the AI Chat Panel half of Sprint 6's reservation, completing it
+
 ---
 
 # NEXT MILESTONE
 
-Sprint 10
+Sprint 11
 
-Code-signing certificate for the installer — still the top remaining Beta blocker, unaffected by Sprint 9
+Code-signing certificate for the installer — still the top remaining Beta blocker, unaffected by Sprint 10
 
-AI Chat Panel implementation — architecture reserved in Sprint 6 (`docs/ARCHITECTURE.md`), ready to build against; the Code Editor half of that same reservation was resolved in Sprint 9 (Monaco)
+Agent orchestration (Planner → Developer → Reviewer → Tester per `agents/*.md`) — Sprint 10 built the chat/provider/context foundation this would run on top of
 
 True concurrent multi-project support (simultaneous open projects, not just switching) — deliberately deferred in Sprint 7; would require a per-project filesystem watcher map and a multi-root Explorer UI
-
-AI Chat Panel and Code Editor implementation — architecture reserved in Sprint 6 (`docs/ARCHITECTURE.md`), ready to build against
 
 ---
 

@@ -52,6 +52,63 @@ declare global {
     last_opened_at: string | null;
   }
 
+  type AiProviderId = 'openai' | 'anthropic' | 'gemini' | 'ollama';
+
+  interface AiProviderInfo {
+    id: string;
+    display_name: string;
+    requires_api_key: boolean;
+  }
+
+  interface AiConversation {
+    id: string;
+    project_id: string | null;
+    title: string;
+    provider: string;
+    model: string;
+    created_at: string;
+    updated_at: string;
+  }
+
+  interface AiContextRef {
+    path: string;
+    start_line: number | null;
+    end_line: number | null;
+  }
+
+  type AiMessageRole = 'user' | 'assistant' | 'system';
+  type AiMessageStatus = 'complete' | 'cancelled' | 'error';
+
+  interface AiMessage {
+    id: string;
+    conversation_id: string;
+    role: AiMessageRole;
+    content: string;
+    provider: string | null;
+    model: string | null;
+    status: AiMessageStatus;
+    error_message: string | null;
+    prompt_tokens: number | null;
+    completion_tokens: number | null;
+    context_refs: AiContextRef[] | null;
+    created_at: string;
+  }
+
+  interface AiContextRefInput {
+    path: string;
+    content: string;
+    startLine?: number;
+    endLine?: number;
+  }
+
+  type AiStreamEventName = 'chunk' | 'usage' | 'done' | 'error';
+
+  interface AiStreamEventPayload {
+    requestId: string;
+    event: AiStreamEventName;
+    data: Record<string, unknown>;
+  }
+
   interface Window {
     nemi: {
       windowControls: {
@@ -89,6 +146,35 @@ declare global {
         listRecent: (limit?: number) => Promise<ProjectRecord[]>;
         recordOpened: (path: string, name: string, description?: string) => Promise<ProjectRecord>;
         remove: (id: string) => Promise<void>;
+      };
+      ai: {
+        listProviders: () => Promise<AiProviderInfo[]>;
+        listOllamaModels: () => Promise<string[]>;
+        hasApiKey: (provider: AiProviderId) => Promise<boolean>;
+        setApiKey: (provider: AiProviderId, apiKey: string) => Promise<void>;
+        clearApiKey: (provider: AiProviderId) => Promise<void>;
+        listConversations: (projectId: string | null) => Promise<AiConversation[]>;
+        createConversation: (input: {
+          projectId: string | null;
+          title: string;
+          provider: string;
+          model: string;
+        }) => Promise<AiConversation>;
+        renameConversation: (id: string, title: string) => Promise<AiConversation>;
+        deleteConversation: (id: string) => Promise<void>;
+        listMessages: (conversationId: string) => Promise<AiMessage[]>;
+        sendMessage: (
+          requestId: string,
+          input: {
+            conversationId: string;
+            content: string;
+            provider: string;
+            model: string;
+            contextRefs?: AiContextRefInput[];
+          },
+        ) => Promise<void>;
+        cancelMessage: (requestId: string) => Promise<boolean>;
+        onStreamEvent: (callback: (payload: AiStreamEventPayload) => void) => () => void;
       };
     };
   }

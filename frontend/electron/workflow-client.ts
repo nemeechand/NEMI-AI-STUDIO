@@ -37,6 +37,15 @@ export interface Milestone {
   updated_at: string;
 }
 
+export interface TestResult {
+  passed: boolean;
+  exit_code: number | null;
+  output_tail: string | null;
+  ran_at: string;
+}
+
+export type RiskLevel = 'low' | 'medium' | 'high' | 'unknown';
+
 export interface Workflow {
   id: string;
   project_id: string | null;
@@ -48,6 +57,9 @@ export interface Workflow {
   model: string;
   conversation_id: string | null;
   error_message: string | null;
+  documentation: string | null;
+  documentation_generated_at: string | null;
+  last_test_result: TestResult | null;
   created_at: string;
   updated_at: string;
   started_at: string | null;
@@ -57,6 +69,15 @@ export interface Workflow {
 export interface WorkflowDetail extends Workflow {
   milestones: Milestone[];
   tasks: AgentTask[];
+}
+
+export interface FeatureSummary {
+  workflow_id: string;
+  files_changed: string[];
+  files_created: string[];
+  files_removed: string[];
+  test_result: TestResult | null;
+  risk_level: RiskLevel;
 }
 
 export function listWorkflows(projectId: string | null): Promise<Workflow[]> {
@@ -104,4 +125,23 @@ export function cancelWorkflow(workflowId: string): Promise<Workflow> {
 
 export function restartWorkflow(workflowId: string): Promise<Workflow> {
   return requestJson(`/workflows/${encodeURIComponent(workflowId)}/restart`, { method: 'POST' });
+}
+
+export function recordTestResult(
+  workflowId: string,
+  result: { passed: boolean; exitCode: number | null; outputTail: string | null },
+): Promise<Workflow> {
+  return requestJson(`/workflows/${encodeURIComponent(workflowId)}/test-result`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      passed: result.passed,
+      exit_code: result.exitCode,
+      output_tail: result.outputTail,
+    }),
+  });
+}
+
+export function getFeatureSummary(workflowId: string): Promise<FeatureSummary> {
+  return requestJson(`/workflows/${encodeURIComponent(workflowId)}/summary`);
 }

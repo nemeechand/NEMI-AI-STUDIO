@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -49,14 +50,14 @@ class WorkflowsRepository:
         row = self._connection.execute(
             "SELECT * FROM workflows WHERE id = ?", (workflow_id,)
         ).fetchone()
-        return dict(row) if row else None
+        return _row_to_dict(row) if row else None
 
     def list_for_project(self, project_id: str | None) -> list[dict[str, Any]]:
         rows = self._connection.execute(
             "SELECT * FROM workflows WHERE project_id IS ? ORDER BY created_at DESC",
             (project_id,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [_row_to_dict(row) for row in rows]
 
     def set_conversation_id(self, workflow_id: str, conversation_id: str) -> None:
         self._connection.execute(
@@ -131,3 +132,44 @@ class WorkflowsRepository:
         )
         self._connection.commit()
         return cursor.rowcount > 0
+
+    def set_documentation(self, workflow_id: str, documentation: str) -> None:
+        """Sprint 15's Documentation Engine: stores the real, grounded
+        Markdown summary generated once a workflow completes (see
+        app/ai/orchestration/documentation.py). Written at most once per
+        workflow — `documentation_generated_at` doubles as the idempotency
+        marker `_sync_workflow_progress` checks before generating again."""
+        now = datetime.now(UTC).isoformat()
+        self._connection.execute(
+            """
+            UPDATE workflows
+            SET documentation = ?, documentation_generated_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (documentation, now, now, workflow_id),
+        )
+        self._connection.commit()
+
+    def set_test_result(
+        self, workflow_id: str, *, passed: bool, exit_code: int | None, output_tail: str | None
+    ) -> None:
+        """Sprint 15's Test Engine: a real pass/fail result from actually
+        running the open project's test suite (triggered by the frontend,
+        the same `build.runTests()` Sprint 13 already built — the backend
+        never runs the user's project itself, only records the outcome)."""
+        now = datetime.now(UTC).isoformat()
+        result = json.dumps(
+            {"passed": passed, "exit_code": exit_code, "output_tail": output_tail, "ran_at": now}
+        )
+        self._connection.execute(
+            "UPDATE workflows SET last_test_result = ?, updated_at = ? WHERE id = ?",
+            (result, now, workflow_id),
+        )
+        self._connection.commit()
+
+
+def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    data = dict(row)
+    if data.get("last_test_result"):
+        data["last_test_result"] = json.loads(data["last_test_result"])
+    return data

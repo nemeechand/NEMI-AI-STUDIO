@@ -19,19 +19,30 @@ function formatTimestamp(iso: string): string {
 }
 
 export function AgentsDashboard({ onNewTask, onNewWorkflow }: AgentsDashboardProps) {
-  const { tasks, cancelTask, retryTask, applyProposedFile } = useAgents();
+  const { tasks, cancelTask, retryTask, applyProposedFile, rollbackTask } = useAgents();
   const { openConversation } = useAi();
   const { projectPath } = useProject();
   const [activeTab, setActiveTab] = useState<DashboardTab>('tasks');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [appliedPaths, setAppliedPaths] = useState<Record<string, true>>({});
+  const [rollingBack, setRollingBack] = useState<string | null>(null);
 
   const sortedTasks = [...tasks].sort((a, b) => b.created_at.localeCompare(a.created_at));
 
   async function handleApply(taskId: string, file: ProposedFile) {
     if (!projectPath) return;
-    await applyProposedFile(projectPath, file);
+    await applyProposedFile(projectPath, taskId, file);
     setAppliedPaths((prev) => ({ ...prev, [`${taskId}:${file.path}`]: true }));
+  }
+
+  async function handleRollback(taskId: string) {
+    if (!projectPath) return;
+    setRollingBack(taskId);
+    try {
+      await rollbackTask(projectPath, taskId);
+    } finally {
+      setRollingBack(null);
+    }
   }
 
   return (
@@ -155,6 +166,23 @@ export function AgentsDashboard({ onNewTask, onNewWorkflow }: AgentsDashboardPro
                       </div>
                     )}
                     <div className="flex flex-wrap gap-1.5 pt-1">
+                      {task.proposed_files_applied && !task.rolled_back_at && (
+                        <button
+                          type="button"
+                          disabled={!projectPath || rollingBack === task.id}
+                          onClick={() => void handleRollback(task.id)}
+                          title="Restore this task's files to how they were before it was applied"
+                          className="flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-fg hover:border-danger hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <RotateCcw size={11} />{' '}
+                          {rollingBack === task.id ? 'Rolling back…' : 'Rollback'}
+                        </button>
+                      )}
+                      {task.rolled_back_at && (
+                        <span className="flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-fg-muted">
+                          <RotateCcw size={11} /> Rolled back
+                        </span>
+                      )}
                       {conversationId && (
                         <button
                           type="button"

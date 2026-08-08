@@ -480,6 +480,30 @@ Verified: tsc build, eslint (0 warnings), prettier (clean, except one pre-existi
 
 Known limitation: code parsing is heuristic/regex-based, not a full AST parser, for Python/JS/TS only. Unresolved (external package) imports are not modeled as graph nodes. Embedding generation is a single synchronous request with a generous timeout, not yet a cancellable background job — a very large project's full embedding pass can still take several minutes even with the 150-file cap. "Requirement" graph nodes are derived 1:1 from a workflow's goal text, since no separate requirements-intake feature exists. No in-app Mermaid rendering (diagrams export as `.mmd` files). Code-signing certificate for the installer remains the top Beta blocker, unaffected by this sprint.
 
+Sprint 15 — Completed (Autonomous Coding Engine)
+
+Goal:
+
+Transform the platform from an AI-assisted IDE into one that can implement a complete feature end to end with minimal intervention: a Feature Execution Engine, Code Planning Engine, Autonomous Coding grounded in real project context, a Safe Change Engine with rollback, a Review Engine, a Test Engine, a Documentation Engine, Feature Approval, and live dashboard integration — preserving Sprints 1–14.
+
+Delivered:
+
+Almost entirely built by extending Sprints 11–14's existing Agent Orchestration Framework, Workflow Engine, and Knowledge Graph rather than a parallel system — a "Feature Execution Engine" request is a Sprint 12 workflow goal; no new intake mechanism exists. `MILESTONE_FORMAT_INSTRUCTION` now asks the Planner to state affected/new files and DB/API/UI/doc/test implications per milestone (Code Planning Engine) — a prompt-only enrichment, `parse_milestones()`'s parser is untouched. `manager.py::_execute()` now grounds Developer tasks with real Knowledge Graph keyword matches against indexed files/functions/classes (`_related_project_code()`) and grounds Reviewer tasks with real `analyze_impact()` dependency/risk data for the preceding Developer task's proposed files — giving the `agents/developer.md`/`agents/reviewer.md` prompts' existing "read existing files first"/"risk level" instructions (unchanged since Sprint 3) something real to act on, rather than rewriting the prompts.
+
+Safe Change Engine: new `file_snapshots` table (task_id FK, write-once per (task, file)) records each file's real pre-apply content, captured by Electron and sent alongside the existing `mark-files-applied` call. `GET /agents/tasks/{id}/rollback-info` (404 if nothing recorded) and `POST /agents/tasks/{id}/mark-rolled-back` (real restore/delete, confirmed by Electron) back a new Rollback button in the Agents Dashboard. This closed a real pre-existing gap: the manual per-file Apply button previously only tracked "applied" in local UI state and never called the backend at all, so Sprint 14's architecture-change recording — and now this sprint's rollback baseline — silently never fired outside Fully Automatic mode; fixed by having `applyProposedFile()` capture and report a real snapshot on every apply, manual or automatic.
+
+Test Engine: reuses Sprint 13's real `build.runTests()` — no new execution mechanism — triggered once per completed workflow (tracked per-project in `localStorage`) only when a real test script was detected; the real result posts to `POST /workflows/{id}/test-result`, persisted as `workflows.last_test_result`. Documentation Engine: new `app/ai/orchestration/documentation.py`, the first real consumer of `agents/documentation.md` — deliberately run as a standalone real LLM call rather than a fifth orchestrated `agent_tasks` role, avoiding the one kind of migration (widening the `agent_role` CHECK constraint) every sprint since 11 has deliberately avoided. Strictly grounded in real facts (`_gather_real_facts()`: goal, milestones, files actually changed, real test result) — never free-form; a missing API key/role fails silently (`None`, logged), never fabricating a summary. Triggered automatically once per workflow completion (`documentation_generated_at` as the durable idempotency marker). The backend never writes to the open project — `WorkflowsProvider.tsx`'s `writeFeatureDocumentation()` always appends a real `CHANGELOG.md` entry and writes a per-feature `docs/features/<slug>.md` file, and appends to `PROJECT_MEMORY.md`/`ARCHITECTURE.md` only if the open project already has them. The Live Workflow View's `Documentation` node (Sprint 13, previously hard-coded "not yet automated") is now genuinely conditional on `workflow.documentation` being real and set.
+
+Feature Approval: new `GET /workflows/{id}/summary` assembles real files-changed/files-created (via the Knowledge Graph's indexed-file check), an always-empty (and explicitly stated as such) `files_removed` since the Developer agent has no deletion mechanism, the real test result, and an aggregated real risk level — rendered in a new "Feature summary" block in `SprintProgressCenter.tsx`.
+
+Found and fixed one real pre-existing gap during implementation (the manual Apply button never calling the backend, detailed above) — otherwise no new live-testing bugs found; the mechanism reused Sprints 11–14's already-proven infrastructure closely enough that no new failure modes surfaced.
+
+docs/ARCHITECTURE.md gained a new "AUTONOMOUS CODING ENGINE (locked — Sprint 15)" section, ten new locked-decision entries, version bumped to 2.2 (the twelve-namespace IPC surface was extended, not widened — `agents`/`workflows` gained methods rather than a thirteenth namespace being added); docs/DATABASE_SCHEMA.md updated with the new `file_snapshots` table and `agent_tasks`/`workflows`'s new additive columns, version bumped to 1.8; docs/SPRINT_15_REPORT.md created.
+
+Verified: tsc build, eslint (0 warnings), prettier (clean, except the same pre-existing unrelated `tsconfig.json` warning), vite build; pytest (136 passed including 14 new, no skips), ruff check (all checks passed), mypy strict (0 issues, 58 source files). Live Playwright verification (real Ollama, no mocks) against a real small test project: indexing, a real single-role Developer task driven through two full live runs of the real local model, and real, non-mocked round trips of the new test-result and feature-summary endpoints through the actual Electron IPC boundary. The small local test model did not produce a parseable ```` ```file:``` ```` block in either live run (the same documented small-model instruction-following limitation as Sprint 11/12) — the resulting rollback-info 404 path was verified live instead, and the full real Apply→snapshot→Rollback round trip is deterministically proven at the API layer by 4 new backend tests (not dependent on the small model's output). Full Sprint 1–14 regression pass (fresh isolated profile): all twelve `window.nemi` IPC namespaces present with their new Sprint 15 fields, Explorer/Monaco/Agents/Knowledge panels and the Intelligence Center all render and function, all backend endpoints reachable only through the real IPC boundary.
+
+Known limitation: the Documentation Engine and Test Engine's live, end-to-end, model-dependent success (as opposed to their graceful-skip paths and their deterministic API-level correctness) was not captured in this session's live pass, since it requires the small local test model to first succeed at milestone decomposition — the same probabilistic dependency Sprint 12/13's own live tests already documented and accepted. Rollback is per-task, not a whole-workflow atomic transaction. No in-app git commit/push action (unchanged since Sprint 13). The Developer agent still cannot propose file deletions (unchanged since Sprint 11) — `files_removed` in the Feature Approval summary is always empty, stated honestly rather than omitted. Code-signing certificate for the installer remains the top Beta blocker, unaffected by this sprint.
+
 ---
 
 # CURRENT STATUS
@@ -704,11 +728,21 @@ Sprint 1 Completed
 
 ✔ Sprint 14 Verified (tsc, eslint, prettier, vite build; pytest ×122 [36 new, incl. a live non-mocked Ollama embedding round trip], ruff, mypy strict [56 source files]; live Playwright verification against this repo itself — real indexing/graph/impact/diagrams/keyword-fallback search at full scale, real embeddings + differentiated semantic search on a real file subset, real git history retrieval; full Sprint 1–13 regression pass with all 12 IPC namespaces and panels confirmed intact — reproduced clean)
 
+✔ Sprint 15 Completed — Autonomous Coding Engine
+
+✔ Safe Change Engine & Rollback System Implemented — new `file_snapshots` table records each file's real pre-apply content (captured by Electron, write-once per task/file); `GET /agents/tasks/{id}/rollback-info` + `POST /agents/tasks/{id}/mark-rolled-back` back a real Rollback button; found and fixed a real pre-existing gap where the manual per-file Apply button never called the backend at all, so rollback (and Sprint 14's architecture-change recording) previously only worked under Fully Automatic mode
+
+✔ Test Engine & Documentation Engine Implemented — real `build.runTests()` (Sprint 13) reused for a per-workflow real test run, result persisted and posted via `POST /workflows/{id}/test-result`; new `app/ai/orchestration/documentation.py` gives `agents/documentation.md` its first real consumer, strictly grounded in real workflow facts, deliberately run standalone rather than as a fifth orchestrated agent role (would require a CHECK-constraint migration); real generated docs written by the frontend to `CHANGELOG.md`, a per-feature doc file, and conditionally to `PROJECT_MEMORY.md`/`ARCHITECTURE.md` if the open project already has them
+
+✔ Autonomous Coding & Feature Approval Implemented — Developer/Reviewer tasks grounded with real Knowledge Graph retrieval and real Impact Analysis data (existing `agents/*.md` prompts finally given something real to act on); Code Planning Engine detail added to the milestone-decomposition prompt (no parser change); new `GET /workflows/{id}/summary` assembles real changed/created files, real test result, and real aggregated risk level, rendered in a new Feature Summary panel
+
+✔ Sprint 15 Verified (tsc, eslint, prettier, vite build; pytest ×136 [14 new], ruff, mypy strict [58 source files]; live Playwright verification — real indexing and a real single-role Developer task driven through two live local-model runs, real test-result/feature-summary round trips through the actual Electron IPC boundary, the rollback-info 404 path confirmed live, full Apply→Rollback round trip deterministically proven by 4 new backend tests; full Sprint 1–14 regression pass with all 12 IPC namespaces (plus their new fields) and every panel confirmed intact — reproduced clean)
+
 ---
 
 # PENDING TASKS
 
-Code-signing certificate for the installer (currently unsigned) — top remaining Beta blocker, unaffected by Sprint 14
+Code-signing certificate for the installer (currently unsigned) — top remaining Beta blocker, unaffected by Sprint 15
 
 Workflow Design
 
@@ -730,7 +764,7 @@ Resizable/drag panel splitters (sidebar and logger panel are currently show/hide
 
 Proposed-file Apply flow (manual and Fully-Automatic) has parser-unit-test + UI-wiring coverage but not an end-to-end live capture in this environment — the small local Ollama model used for testing doesn't reliably follow the exact ` ```file:path``` ` instruction format (a model instruction-following limitation, not a parser defect)
 
-Only four of the eight `agents/*.md` roles (planner/developer/reviewer/tester) are scheduled; the rest remain reference documents, not wired into the automated queue
+Only four of the eight `agents/*.md` roles (planner/developer/reviewer/tester) are scheduled into the `agent_tasks` queue; `documentation` gained a real, standalone (non-queued) consumer in Sprint 15 (see `app/ai/orchestration/documentation.py`); architect/debugger/release_manager remain reference documents only
 
 Milestone/pipeline dependency chains are linear (one link per task), not a true multi-parent dependency graph — deliberately out of scope since Sprint 11
 
@@ -738,7 +772,11 @@ Resource/disk usage reporting (Sprint 12/13) is Windows-only, matching this app'
 
 Network throughput/bandwidth is not shown (Sprint 13) — no cross-platform API this app relies on exposes it; connectivity status is shown instead
 
-Documentation/Commit/Push pipeline stages have no automation behind them yet (Sprint 13's Live Workflow View marks them explicitly as not-yet-automated)
+Commit/Push pipeline stages still have no automation behind them (Sprint 13's Live Workflow View marks them explicitly as not-yet-automated) — Documentation became genuinely automated in Sprint 15
+
+Rollback is per-task, not a whole-workflow atomic transaction (Sprint 15) — deliberately matches the existing per-task Apply granularity
+
+The Developer agent still cannot propose file deletions (unchanged since Sprint 11) — the Feature Approval summary's `files_removed` is always empty, stated honestly rather than omitted
 
 ---
 
@@ -910,23 +948,25 @@ Sprint 13 Completed — Live Development Dashboard & Intelligence Center: a real
 
 Sprint 14 Completed — Knowledge Graph & AI Memory Engine: a relational knowledge graph (`graph_nodes`/`graph_edges`, not a dedicated graph database) built by a new indexer that walks the open project's files (a deliberate, scoped exception to Sprint 5's Filesystem Ownership rule, justified as bulk read-only analysis rather than interactive CRUD), extracts functions/classes/imports via a heuristic Python/JS/TS parser (explicitly not a full AST parser), and links real git commit/author history gathered by Electron; `memory`'s four previously-unused types (`long_term`/`knowledge`/`project`/`conversation`) gained real writers (sprint summaries, bugs, fixes, architecture changes), retrieved via real cross-project keyword-overlap ranking and fed into the Planner's prompt before goal decomposition (AI Learning, genuine retrieval not claimed self-improvement); real Semantic Search (OpenAI/Gemini/Ollama embeddings, Anthropic excluded since it has no embeddings API) with an honest keyword-fallback mode whenever no provider/embeddings exist; Architecture Intelligence answers "why/where/what breaks/who changed it" via real graph+memory+git-history retrieval fed to the AI Chat Panel, not unaided model reasoning; Code Impact Analysis uses a transparent, stated risk heuristic, never presented as ML; Automatic Documentation generates real Mermaid dependency/architecture diagrams, exported as `.mmd` files; found and fixed two real issues during implementation/live verification (a parser regex accidentally excluding class methods from extraction; bulk-embedding a real large project needing a bounded candidate cap, smaller batches, and longer timeouts rather than an unbounded single request) — verified via live Playwright testing against this repo itself at full scale (684 real files, 1,477 real graph nodes) plus a real embeddings/semantic-search round trip on a small real file subset, a full Sprint 1–13 regression pass, and the full offline suite; resolves the persistent-memory/knowledge-graph work flagged as pending in every PROJECT_MEMORY.md entry since Sprint 11
 
+Sprint 15 Completed — Autonomous Coding Engine: built almost entirely by extending Sprints 11–14's existing Agent Orchestration Framework, Workflow Engine, and Knowledge Graph — a "Feature Execution Engine" request is a Sprint 12 workflow goal, no new intake mechanism; the milestone-decomposition prompt now asks for affected/new files and DB/API/UI/doc/test implications per milestone (prompt-only, parser untouched); Developer/Reviewer tasks are grounded with real Knowledge Graph keyword matches and real Impact Analysis dependency/risk data, giving the `agents/*.md` prompts' existing "read existing files first"/"risk level" instructions something real to act on; new `file_snapshots` table backs a real Safe Change Engine and Rollback System (`GET/POST .../rollback-info`, `.../mark-rolled-back`), which also closed a real pre-existing gap where the manual Apply button never called the backend at all; a Test Engine reuses Sprint 13's real `build.runTests()`, persisting a real result on the workflow; a Documentation Engine gives `agents/documentation.md` its first real consumer — a standalone, strictly-fact-grounded LLM call (deliberately not a fifth orchestrated role, avoiding a CHECK-constraint migration) — whose real output the frontend writes to `CHANGELOG.md`, a per-feature doc file, and conditionally `PROJECT_MEMORY.md`/`ARCHITECTURE.md`; a new Feature Approval summary endpoint assembles real changed/created files, real test results, and a real aggregated risk level; found and fixed one real pre-existing gap (the manual Apply button) during implementation — verified via live Playwright testing (real indexing, a real Developer task driven through two live local-model runs, real test-result/summary round trips through the actual Electron IPC boundary, the rollback-info 404 path confirmed live, the full Apply→Rollback round trip deterministically proven by new backend tests), a full Sprint 1–14 regression pass, and the full offline suite; resolves the "implement a complete feature end to end" work this platform's vision has been building toward since Sprint 11
+
 ---
 
 # NEXT MILESTONE
 
-Sprint 15
+Sprint 16
 
-Code-signing certificate for the installer — still the top remaining Beta blocker, unaffected by Sprint 14
+Code-signing certificate for the installer — still the top remaining Beta blocker, unaffected by Sprint 15
 
 True concurrent multi-project support (simultaneous open projects, not just switching) — deliberately deferred in Sprint 7; would require a per-project filesystem watcher map and a multi-root Explorer UI
 
-Wiring the remaining four `agents/*.md` roles (architect, debugger, etc.) into the orchestration queue, and/or a richer dependency model beyond a single linear chain per pipeline — Sprint 11/12 deliberately scoped to the four core roles and linear chains only
-
-An in-app git commit/push action (Sprint 13 added read-only git status only) — would let the Live Workflow View's Documentation/Commit/Push nodes become genuinely automated instead of marked not-yet-automated
+An in-app git commit/push action (Sprint 13 added read-only git status only) — would let the Live Workflow View's Commit/Push nodes become genuinely automated (Documentation became automated in Sprint 15)
 
 Turning embedding generation into a cancellable background job with progress reporting (Sprint 14 shipped it as a single bounded synchronous request) — would remove the remaining wall-clock cap on how much of a very large project can be embedded in one pass
 
-A true multi-language AST parser for code indexing (Sprint 14's parser is heuristic/regex-based, Python/JS/TS only) — would improve Knowledge Graph/Code Impact Analysis accuracy on other languages and on scope-sensitive constructs
+A true multi-language AST parser for code indexing (Sprint 14's parser is heuristic/regex-based, Python/JS/TS only) — would improve Knowledge Graph/Code Impact Analysis and Sprint 15's agent-grounding accuracy on other languages and on scope-sensitive constructs
+
+Whole-workflow atomic rollback (Sprint 15 shipped per-task rollback only) — would let a multi-milestone feature be undone as a single unit
 
 ---
 

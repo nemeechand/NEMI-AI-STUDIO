@@ -10,8 +10,14 @@ import type {
   AiProviderInfo,
   StreamEventPayload,
 } from './ai-client';
-import type { AgentInfo, AgentRoleKey, AgentTask } from './agent-client';
-import type { ApprovalMode, Workflow, WorkflowDetail } from './workflow-client';
+import type {
+  AgentInfo,
+  AgentRoleKey,
+  AgentTask,
+  FileSnapshotInput,
+  RollbackInfo,
+} from './agent-client';
+import type { ApprovalMode, FeatureSummary, Workflow, WorkflowDetail } from './workflow-client';
 import type { GitStatus } from './git-status';
 import type {
   AvailableRunners,
@@ -145,8 +151,12 @@ const agentsApi = {
     ipcRenderer.invoke('agents:retry-task', taskId),
   approveTask: (taskId: string): Promise<AgentTask> =>
     ipcRenderer.invoke('agents:approve-task', taskId),
-  markFilesApplied: (taskId: string): Promise<AgentTask> =>
-    ipcRenderer.invoke('agents:mark-files-applied', taskId),
+  markFilesApplied: (taskId: string, snapshots?: FileSnapshotInput[]): Promise<AgentTask> =>
+    ipcRenderer.invoke('agents:mark-files-applied', taskId, snapshots),
+  getRollbackInfo: (taskId: string): Promise<RollbackInfo> =>
+    ipcRenderer.invoke('agents:get-rollback-info', taskId),
+  markRolledBack: (taskId: string): Promise<AgentTask> =>
+    ipcRenderer.invoke('agents:mark-rolled-back', taskId),
   onTasksChanged: (callback: () => void) => {
     const listener = () => callback();
     ipcRenderer.on('agents:tasks-changed', listener);
@@ -175,6 +185,12 @@ const workflowsApi = {
     ipcRenderer.invoke('workflows:cancel', workflowId),
   restart: (workflowId: string): Promise<Workflow> =>
     ipcRenderer.invoke('workflows:restart', workflowId),
+  recordTestResult: (
+    workflowId: string,
+    result: { passed: boolean; exitCode: number | null; outputTail: string | null },
+  ): Promise<Workflow> => ipcRenderer.invoke('workflows:record-test-result', workflowId, result),
+  getSummary: (workflowId: string): Promise<FeatureSummary> =>
+    ipcRenderer.invoke('workflows:get-summary', workflowId),
 };
 
 const systemApi = {

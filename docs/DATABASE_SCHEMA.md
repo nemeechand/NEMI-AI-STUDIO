@@ -1,7 +1,7 @@
 # DATABASE_SCHEMA.md
 
-Version: 1.7
-Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4); `projects` Repository Implemented (Sprint 7); `ai_conversations`/`ai_messages` Added and Implemented (Sprint 10); `agent_tasks` Added and `memory` Repository Implemented (Sprint 11); `workflows`/`milestones` Added and `agent_tasks` Extended (Sprint 12); `history` Repository Implemented and `agent_tasks.live_output` Added (Sprint 13); `graph_nodes`/`graph_edges`/`embeddings` Added, `files` Repository Implemented, `memory`'s Remaining Types Implemented (Sprint 14)
+Version: 1.8
+Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4); `projects` Repository Implemented (Sprint 7); `ai_conversations`/`ai_messages` Added and Implemented (Sprint 10); `agent_tasks` Added and `memory` Repository Implemented (Sprint 11); `workflows`/`milestones` Added and `agent_tasks` Extended (Sprint 12); `history` Repository Implemented and `agent_tasks.live_output` Added (Sprint 13); `graph_nodes`/`graph_edges`/`embeddings` Added, `files` Repository Implemented, `memory`'s Remaining Types Implemented (Sprint 14); `file_snapshots` Added, `agent_tasks`/`workflows` Extended for the Autonomous Coding Engine (Sprint 15)
 Engine: SQLite
 
 ---
@@ -270,6 +270,7 @@ Index: `idx_ai_messages_conversation_id` on `conversation_id`.
 | proposed_files_applied | INTEGER | (Sprint 12) NOT NULL DEFAULT 0                                     | boolean (0/1) — set once `proposed_files` has actually been written to disk (manually via Apply, or automatically under Fully Automatic mode), so a reload doesn't lose that state |
 | conflict_warning    | TEXT    | (Sprint 12)                                                           | nullable — set when another task in the same workflow proposed an overlapping file path (see ARCHITECTURE.md's conflict detection) |
 | live_output         | TEXT    | (Sprint 13)                                                           | nullable — the accumulated-so-far streamed text of a currently `running` task, flushed periodically (not per-chunk); the Live Development Dashboard's AI Thinking Panel data source; cleared to NULL on completion/failure/cancellation |
+| rolled_back_at      | TEXT    | (Sprint 15)                                                           | nullable — set by `POST /agents/tasks/{id}/mark-rolled-back` once Electron has actually restored/deleted every file recorded in `file_snapshots` for this task; also resets `proposed_files_applied` to 0 |
 | created_at          | TEXT    | NOT NULL                                                              |                                                    |
 | updated_at          | TEXT    | NOT NULL                                                              |                                                    |
 | started_at          | TEXT    |                                                                        | nullable                                          |
@@ -280,10 +281,15 @@ Indexes: `idx_agent_tasks_project_id` on `project_id`,
 `list_runnable()`'s scheduling query), `idx_agent_tasks_depends_on`
 on `depends_on_task_id`.
 
-The six Sprint 12 columns are all additive/nullable-or-defaulted,
-added via `_add_column_if_missing()` — deliberately not touching the
-`status` CHECK constraint (SQLite can't alter one in place on a table
-that already shipped in Sprint 11 without a full table rebuild).
+The six Sprint 12 columns (and Sprint 15's `rolled_back_at`) are all
+additive/nullable-or-defaulted, added via `_add_column_if_missing()`
+— deliberately not touching the `status` CHECK constraint (SQLite
+can't alter one in place on a table that already shipped in Sprint 11
+without a full table rebuild). Sprint 15 considered — and deliberately
+rejected — widening `agent_role`'s CHECK constraint to add a fifth
+`'documentation'` value; see ARCHITECTURE.md's AUTONOMOUS CODING
+ENGINE section for why the Documentation Engine runs as a standalone
+call instead.
 
 ## workflows (Sprint 12)
 
@@ -299,6 +305,9 @@ that already shipped in Sprint 11 without a full table rebuild).
 | model          | TEXT | NOT NULL                                                                                        |                                                     |
 | conversation_id| TEXT | FK → ai_conversations.id                                                                        | nullable — currently unused (each task has its own conversation instead), reserved for a future workflow-level summary conversation |
 | error_message  | TEXT |                                                                                                    | nullable, e.g. "could not parse any milestones"    |
+| documentation  | TEXT | (Sprint 15)                                                                                     | nullable — the Documentation Engine's real, grounded Markdown output (`app/ai/orchestration/documentation.py`), generated once when the workflow completes |
+| documentation_generated_at | TEXT | (Sprint 15)                                                                        | nullable — set alongside `documentation`; doubles as the idempotency marker `_sync_workflow_progress()` checks before generating again |
+| last_test_result | TEXT | (Sprint 15)                                                                                   | nullable, JSON-encoded `{passed, exit_code, output_tail, ran_at}` — the Test Engine's real result from `build.runTests()`, reported via `POST /workflows/{id}/test-result` |
 | created_at     | TEXT | NOT NULL                                                                                        |                                                     |
 | updated_at     | TEXT | NOT NULL                                                                                        |                                                     |
 | started_at     | TEXT |                                                                                                    | nullable                                           |
@@ -394,6 +403,31 @@ premature infrastructure. Comparing vectors from two different
 embedding spaces would be meaningless, so a query only ever scores
 rows embedded with the exact same provider+model it's using.
 
+## file_snapshots (Sprint 15)
+
+| Column           | Type | Constraints                        | Notes                                              |
+|------------------|------|---------------------------------------|---------------------------------------------------------|
+| id               | TEXT | PRIMARY KEY                          |                                                           |
+| task_id          | TEXT | NOT NULL, FK → agent_tasks.id        |                                                           |
+| project_id       | TEXT | FK → projects.id                     | nullable                                                 |
+| relative_path    | TEXT | NOT NULL                             |                                                           |
+| previous_content | TEXT |                                       | nullable — the file's real content immediately before this task overwrote it; NULL means the file did not exist yet (rollback should delete it, not restore empty content) |
+| created_at       | TEXT | NOT NULL                             |                                                           |
+
+Index: `idx_file_snapshots_task_id` on `task_id`.
+Unique constraint: `(task_id, relative_path)` — write-once per (task,
+file): a repeat apply of the same task never overwrites the baseline,
+so it always holds the state from *before this task's own changes*.
+
+The Safe Change Engine's rollback baseline — captured by Electron
+(never the backend, per Sprint 5's Filesystem Ownership rule) as part
+of the same `mark-files-applied` call that already existed since
+Sprint 11, now carrying a real `snapshots` payload. `GET
+/agents/tasks/{id}/rollback-info` returns what's recorded (404 if
+nothing was, rather than silently succeeding); `POST
+/agents/tasks/{id}/mark-rolled-back` confirms Electron actually
+restored/deleted every file.
+
 ---
 
 # RELATIONSHIPS
@@ -422,11 +456,13 @@ projects 1---* embeddings       (project_id nullable)
 graph_nodes 1---* graph_edges   (graph_edges.from_node_id, graph_edges.to_node_id — both FKs into graph_nodes)
 graph_nodes 0..1---1 files/agent_tasks/workflows/etc.  (graph_nodes.ref_id — an id into the real backing row, when one exists; not a FK, since ref_id's target table varies by node_type)
 embeddings 0..1---1 files/memory/workflows  (embeddings.entity_id — same "id into whichever table entity_type names" pattern as graph_nodes.ref_id, not a FK)
+agent_tasks 1---* file_snapshots  (file_snapshots.task_id; write-once per (task, file))
+projects 1---* file_snapshots     (project_id nullable)
 ```
 
 ---
 
-# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7, Sprint 10, Sprint 11, Sprint 12, Sprint 13, Sprint 14)
+# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7, Sprint 10, Sprint 11, Sprint 12, Sprint 13, Sprint 14, Sprint 15)
 
 - Schema implemented exactly as designed above:
   `backend/app/db/schema.py::SCHEMA_STATEMENTS` /  `init_db()`.
@@ -469,6 +505,17 @@ embeddings 0..1---1 files/memory/workflows  (embeddings.entity_id — same "id i
   `agent_tasks` (agent pipeline scheduling) and Sprint 12's
   `workflows` (AI Project Manager goals) — different tables for
   different concerns, not a rename.
+- **`file_snapshots` is a new table added this sprint (Sprint 15)**,
+  backing the Safe Change Engine / Rollback System — see its table
+  section above and ARCHITECTURE.md's AUTONOMOUS CODING ENGINE section.
+  `agent_tasks` gained one additive column (`rolled_back_at`) and
+  `workflows` gained three (`documentation`, `documentation_generated_at`,
+  `last_test_result`) — none touching either table's existing CHECK
+  constraints, continuing the same discipline established since Sprint
+  12. Sprint 15 deliberately did NOT widen `agent_tasks.agent_role`'s
+  CHECK constraint to add a `'documentation'` value, even though a
+  Documentation Engine was in scope — see ARCHITECTURE.md for why it
+  runs as a standalone call instead.
 - **`graph_nodes`/`graph_edges`/`embeddings` are new tables added this
   sprint (Sprint 14)**, backing the Knowledge Graph and Semantic
   Search — see their table sections above and ARCHITECTURE.md's

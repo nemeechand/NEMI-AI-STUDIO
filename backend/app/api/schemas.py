@@ -154,10 +154,35 @@ class AgentTaskOut(BaseModel):
     proposed_files_applied: bool = False
     conflict_warning: str | None = None
     live_output: str | None = None
+    rolled_back_at: str | None = None
     created_at: str
     updated_at: str
     started_at: str | None
     completed_at: str | None
+
+
+class FileSnapshotIn(BaseModel):
+    """Sprint 15's Safe Change Engine: the real on-disk content of a file
+    immediately before Electron overwrites it with a Developer task's
+    proposal — `previous_content: null` means the file did not exist yet
+    (a rollback should delete it, not restore empty content)."""
+
+    path: str = Field(min_length=1)
+    previous_content: str | None = None
+
+
+class MarkFilesAppliedRequest(BaseModel):
+    snapshots: list[FileSnapshotIn] = Field(default_factory=list)
+
+
+class RollbackFileOut(BaseModel):
+    path: str
+    previous_content: str | None
+
+
+class RollbackInfoOut(BaseModel):
+    task_id: str
+    files: list[RollbackFileOut]
 
 
 class AgentPipelineCreate(BaseModel):
@@ -198,6 +223,13 @@ class MilestoneOut(BaseModel):
     updated_at: str
 
 
+class TestResultOut(BaseModel):
+    passed: bool
+    exit_code: int | None = None
+    output_tail: str | None = None
+    ran_at: str
+
+
 class WorkflowOut(BaseModel):
     id: str
     project_id: str | None
@@ -209,6 +241,9 @@ class WorkflowOut(BaseModel):
     model: str
     conversation_id: str | None
     error_message: str | None
+    documentation: str | None = None
+    documentation_generated_at: str | None = None
+    last_test_result: TestResultOut | None = None
     created_at: str
     updated_at: str
     started_at: str | None
@@ -220,6 +255,28 @@ class WorkflowDetailOut(WorkflowOut):
     tasks: list[AgentTaskOut]
 
 
+RiskLevel = Literal["low", "medium", "high", "unknown"]
+
+
+class FeatureSummaryOut(BaseModel):
+    """Sprint 15's Feature Approval summary: real data assembled from the
+    workflow's own tasks/snapshots/test result — never a fabricated
+    "review" of changes that weren't actually inspected."""
+
+    workflow_id: str
+    files_changed: list[str]
+    files_created: list[str]
+    # A Developer task can only ever propose new/changed file content
+    # (see manager.py's _extract_proposed_files, Sprint 11's locked
+    # human-gated-apply decision) — it has no mechanism to propose a
+    # deletion, so this is always empty. Included, and always empty,
+    # rather than omitted, so the UI can state that honestly instead of
+    # silently implying deletions were checked for.
+    files_removed: list[str]
+    test_result: TestResultOut | None
+    risk_level: RiskLevel
+
+
 class WorkflowCreate(BaseModel):
     project_id: str | None = None
     title: str = Field(min_length=1, max_length=200)
@@ -227,6 +284,16 @@ class WorkflowCreate(BaseModel):
     provider: str = Field(min_length=1)
     model: str = Field(min_length=1)
     approval_mode: ApprovalMode = "review"
+
+
+class TestResultIn(BaseModel):
+    """Sprint 15's Test Engine: reported by Electron after actually
+    running the open project's real test suite (`build.runTests()`,
+    Sprint 13) — the backend never executes the user's project itself."""
+
+    passed: bool
+    exit_code: int | None = None
+    output_tail: str | None = Field(default=None, max_length=4000)
 
 
 # --- Knowledge Graph / AI Memory Engine (Sprint 14) ---

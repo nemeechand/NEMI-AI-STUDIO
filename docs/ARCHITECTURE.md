@@ -1,8 +1,8 @@
 # ARCHITECTURE.md
 
-Version: 2.1
-Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8); Monaco Code Editor Locked (Sprint 9); AI Chat & Agent Framework Locked (Sprint 10); Agent Orchestration Framework Locked (Sprint 11); Workflow Engine & AI Project Manager Locked (Sprint 12); Live Development Dashboard & Intelligence Center Locked (Sprint 13); Knowledge Graph & AI Memory Engine Locked (Sprint 14)
-Governs: Sprint 14 onward
+Version: 2.2
+Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8); Monaco Code Editor Locked (Sprint 9); AI Chat & Agent Framework Locked (Sprint 10); Agent Orchestration Framework Locked (Sprint 11); Workflow Engine & AI Project Manager Locked (Sprint 12); Live Development Dashboard & Intelligence Center Locked (Sprint 13); Knowledge Graph & AI Memory Engine Locked (Sprint 14); Autonomous Coding Engine Locked (Sprint 15)
+Governs: Sprint 15 onward
 
 ---
 
@@ -143,8 +143,12 @@ Three processes, already implemented and hardened in Sprint 2:
 ## IPC Boundary (locked decision)
 
 All renderer → native calls go through `window.nemi`
-(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 14
-this surface has twelve namespaces: `windowControls` (Sprint 2),
+(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 15
+this surface still has twelve namespaces (Sprint 15 extended two
+existing ones — `agents` and `workflows` — rather than adding a
+thirteenth, since the Autonomous Coding Engine's new capabilities are
+extensions of the existing agent/workflow lifecycle, not a new
+concern): `windowControls` (Sprint 2),
 `backend` (Sprint 4: `health()`; Sprint 5: `logs()`), `fs`
 (Sprint 5: project/file CRUD + change notifications; Sprint 7:
 `selectDirectory()`, `createDirectory()`; Sprint 9: `listAllFiles()`
@@ -158,9 +162,12 @@ as the rest of `fs`, see FILESYSTEM OWNERSHIP below), `projects`
 — see AI CHAT & AGENT FRAMEWORK below), `agents` (Sprint 11:
 `list()`, `listTasks()`/`getTask()`, `createPipeline()`,
 `cancelTask()`/`retryTask()`, `onTasksChanged()`; Sprint 12:
-`approveTask()`, `markFilesApplied()` — see AGENT ORCHESTRATION
-FRAMEWORK below), `workflows` (Sprint 12: `list()`, `get()`,
-`create()`, `pause()`/`resume()`/`cancel()`; Sprint 13: `restart()`),
+`approveTask()`, `markFilesApplied()`; Sprint 15: `markFilesApplied()`
+extended to accept real file snapshots, `getRollbackInfo()`,
+`markRolledBack()` — see AGENT ORCHESTRATION FRAMEWORK below and
+AUTONOMOUS CODING ENGINE further down), `workflows` (Sprint 12:
+`list()`, `get()`, `create()`, `pause()`/`resume()`/`cancel()`; Sprint
+13: `restart()`; Sprint 15: `recordTestResult()`, `getSummary()`),
 `system` (Sprint 12: `getResourceUsage()`; Sprint 13: `getMetrics()`
 — see LIVE DEVELOPMENT DASHBOARD & INTELLIGENCE CENTER below), `git`
 (Sprint 13: `getStatus()`), `build` (Sprint 13: `detectRunners()`,
@@ -182,9 +189,10 @@ globals exist. All ambient types shared across `window.nemi` methods
 `TokenStats`, `HistoryEntry`, `GraphNode`, `GraphEdge`,
 `KnowledgeGraph`, `KnowledgeStats`, `IndexResult`,
 `EmbeddingProviderInfo`, `EmbedResult`, `SearchResult`, `ImpactResult`,
-`DiagramResult`, `FileContext`, `MemoryEntry`, etc.) live inside the
-`declare global` block of `electron-api.d.ts` so they're usable
-anywhere in the renderer without imports.
+`DiagramResult`, `FileContext`, `MemoryEntry`, `FileSnapshotInput`,
+`RollbackInfo`, `TestResult`, `FeatureSummary`, `RiskLevel`, etc.) live
+inside the `declare global` block of `electron-api.d.ts` so they're
+usable anywhere in the renderer without imports.
 
 The renderer never talks to the backend HTTP API directly — it has no
 network access to it, and the CSP's `connect-src 'self'` intentionally
@@ -1371,6 +1379,184 @@ agent workflows are.
 
 ---
 
+# AUTONOMOUS CODING ENGINE (locked decision — Sprint 15)
+
+Transforms the platform from an AI-assisted IDE into a platform that
+can implement a complete feature end to end with minimal
+intervention — built almost entirely by extending Sprints 11–14's
+existing Agent Orchestration Framework, Workflow Engine, and
+Knowledge Graph rather than introducing a parallel system. A "Feature
+Execution Engine" request ("Create a Login System") *is* a Sprint 12
+workflow goal — no new intake mechanism was built, since one already
+existed and does the job.
+
+## Code Planning Engine: a richer decomposition prompt, not a new parser
+
+`MILESTONE_FORMAT_INSTRUCTION` (`project_manager.py`) now asks the
+Planner to state, per milestone: affected files, new files, database
+changes, API changes, UI changes, documentation changes, and test
+requirements. This is a prompt-only change — `parse_milestones()`'s
+regex still only splits on `### MILESTONE:` markers and captures
+everything after as the milestone's `description`, so the richer
+analysis lives inside that same free-text field, visible in the
+Sprint Progress Center exactly as before. No schema or parser risk was
+taken to add this.
+
+## Autonomous Coding: grounding real agents with real retrieval, not new instructions
+
+`agents/developer.md` and `agents/reviewer.md` already instruct
+"read existing files first," "reuse existing modules," "never
+duplicate code," and ask the Reviewer for a "Risk Level" — this
+sprint's actual contribution is giving those agents something real to
+act on, not new prompt text. `manager.py::_execute()` now, for a
+`developer` task, queries the project's Knowledge Graph (Sprint 14)
+for indexed files/functions/classes whose label shares a keyword with
+the task description (`_related_project_code()` — the same honest,
+bounded keyword-match style as Sprint 14's other retrieval helpers,
+not a claim of semantic understanding) and appends real matches to the
+prompt. For a `reviewer` task, it looks up the immediately-preceding
+Developer task's real proposed files and runs Sprint 14's
+`analyze_impact()` against each one, appending real dependent-count/
+risk-label data. Both are silently absent if the project hasn't been
+indexed — an honest absence of context, never a fabricated one.
+
+## Safe Change Engine & Rollback System
+
+A new `file_snapshots` table (additive, `task_id` FK into
+`agent_tasks`) records each file's real on-disk content immediately
+before it's overwritten — captured by Electron (never the backend,
+per Sprint 5's Filesystem Ownership rule) and sent as part of the same
+`mark-files-applied` call that already existed, now carrying a real
+`snapshots: [{path, previous_content}]` payload. `previous_content:
+null` means the file didn't exist yet — a rollback deletes it rather
+than restoring empty content. One row per (task, file), written only
+the *first* time that file is touched by that task, so it always
+holds the state from before the task's own changes even if apply is
+somehow triggered twice.
+
+`GET /agents/tasks/{id}/rollback-info` returns what was recorded (404
+if nothing was — an honest "there is nothing to roll back to" rather
+than silently succeeding); `POST /agents/tasks/{id}/mark-rolled-back`
+confirms Electron actually restored/deleted every file (real
+`fs.writeFile`/`fs.deleteEntry` calls) and flips
+`proposed_files_applied` back to `false`, stamping a new
+`rolled_back_at` column. **This closed a real, pre-existing gap**: the
+manual per-file Apply button (`AgentsDashboard.tsx`) previously only
+tracked "applied" in local component state and never called
+`mark-files-applied` at all — meaning Sprint 14's architecture-change
+memory/graph-edge recording, and now this sprint's rollback baseline,
+silently never fired for a manually-applied file, only for
+Fully-Automatic mode's. Fixed by having `applyProposedFile()` capture
+and report a real snapshot on every apply, manual or automatic —
+consistent Safe Change Engine coverage regardless of approval mode.
+
+"Estimate regression risk" reuses Sprint 14's existing risk heuristic
+rather than inventing a second one — see Feature Approval below.
+
+## Test Engine
+
+No new test-execution mechanism was built — `build.runTests()`
+(Sprint 13's real, project-script-detected test runner) is reused.
+`WorkflowsProvider.tsx` triggers a real test run once per completed
+workflow (tracked per-project in `localStorage`, so a relaunch doesn't
+re-run tests for a workflow that finished in an earlier session) *only
+if* `detectAvailableRunners()` found a real test script — never a
+button, or an automatic action, that would just fail. The real
+exit code/pass-fail result is reported to `POST
+/workflows/{id}/test-result` and persisted as `workflows.last_test_result`
+(a JSON additive column: `{passed, exit_code, output_tail, ran_at}`).
+"Retry failed tasks where safe" is unchanged from Sprint 11/12's
+existing automatic-retry-with-backoff and manual retry — no new retry
+mechanism was needed.
+
+## Review Engine
+
+Already real since Sprint 11 (the Reviewer role executes for real,
+against the real Developer output, through the same pipeline every
+other stage uses) — this sprint's contribution is the Knowledge Graph
+grounding described above, giving its already-existing "Risk Level"
+judgment (see `agents/reviewer.md`'s RESPONSE FORMAT, unchanged since
+Sprint 3) real dependency data to reference instead of guessing from
+diff text alone.
+
+## Documentation Engine
+
+New `app/ai/orchestration/documentation.py::generate_feature_documentation()`
+— the first real consumer of `agents/documentation.md` (previously a
+chat-invokable persona only, per `agent_roles.ORCHESTRATED_ROLES`).
+Deliberately **not** wired in as a fifth orchestrated `agent_tasks`
+role: doing so would require rebuilding `agent_tasks` to widen its
+`agent_role` CHECK constraint (SQLite can't alter one in place), the
+one kind of migration every sprint since 11 has deliberately avoided
+in favor of additive columns. Instead it's a standalone, real LLM call
+— same `provider.stream_chat()`, same `ai_conversations`/`ai_messages`
+persistence pattern as every orchestrated task, just outside the
+`agent_tasks` queue — triggered once, automatically, when
+`_sync_workflow_progress()` observes a workflow reaching `completed`
+(idempotency guarded by the new `documentation_generated_at` column,
+not a session-only flag, so a restart never re-generates it).
+
+**Strictly grounded, never free-form**: the system prompt is the real
+`agents/documentation.md` role text plus one instruction — write from
+the REAL facts given (goal, milestones, files actually changed, real
+test result — `_gather_real_facts()`), never invent one. Missing an
+API key, an unreachable provider, or a missing role file all fail
+*silently* (logged, `None` returned) — undocumented is an acceptable,
+honest outcome; a fabricated summary of what happened is not.
+
+The backend never writes to the open project (Sprint 5) — the real
+generated Markdown is exposed on `workflows.documentation` via the
+existing `GET /workflows/{id}` and written to disk entirely by
+`WorkflowsProvider.tsx`'s `writeFeatureDocumentation()`: a real
+`CHANGELOG.md` entry (created if missing) is *always* appended, plus a
+per-feature file at `docs/features/<slug>.md`; `PROJECT_MEMORY.md` and
+`ARCHITECTURE.md` are appended to *only if the open project already
+has them* — never assumed, since an arbitrary user project has no
+reason to follow this app's own documentation convention. Tracked
+per-workflow in `localStorage` (mirroring the Test Engine) so a
+relaunch never re-appends the same entry.
+
+The Live Workflow View's `Documentation` node (Sprint 13, originally
+hard-coded "not yet automated") is now genuinely conditional: `done`
+once `workflow.documentation` is real and set, `not-automated` if the
+workflow completed but generation was skipped (no key/role), `pending`
+otherwise. `Commit`/`Push` remain hard-coded `not-automated` — this
+sprint did not add an in-app git write action, unchanged from Sprint
+13's scoping.
+
+## Feature Approval
+
+`GET /workflows/{id}/summary` assembles real data — never an LLM's
+self-report — from the workflow's own Developer tasks:
+`files_changed`/`files_created` are derived by checking each real
+proposed path against the Knowledge Graph's indexed file list (in the
+index → "changed", not in it → "created"; stated as a heuristic,
+accurate as long as the project was indexed before the feature ran,
+not a guarantee). `files_removed` is always `[]` and explicitly
+returned as such rather than omitted: a Developer task can only ever
+propose new/changed file *content* (Sprint 11's locked
+`​```file:path``` ` format), it has no mechanism to propose a
+deletion — the summary states that honestly instead of silently
+implying deletions were checked for and found none. `risk_level`
+reuses Sprint 14's `analyze_impact()` risk label, taking the worst
+across every changed/created file. Rendered in a new "Feature summary"
+block in `SprintProgressCenter.tsx`. Apply/Reject were already
+supported (Apply is opt-in per file; not clicking it is Reject);
+Rollback is the new capability described above.
+
+## Explicitly out of scope
+
+A fifth orchestrated `agent_role` (Documentation runs standalone
+instead, see above); an in-app git commit/push action (unchanged from
+Sprint 13); workflow-level (multi-task) atomic rollback — rollback
+remains per-task, matching the existing per-task Apply granularity;
+background/queued test execution with live streamed output (a
+Fully-Automatic-style synchronous trigger, same tier as the Test
+Engine description above); file-deletion proposals from the Developer
+agent (unchanged Sprint 11 scoping).
+
+---
+
 # PLUGIN / EXTENSION ARCHITECTURE (future — not started)
 
 MASTER_SPECIFICATION.md lists "Plugin Marketplace" under FUTURE
@@ -1642,6 +1828,55 @@ must never run with Node.js integration in the renderer.
     local model's realistic per-request budget. A single synchronous
     request with a generous timeout (same tier as Sprint 13's build/
     test runners), not yet a cancellable background job.
+57. **(Sprint 15)** A "Feature Execution Engine" request is a Sprint 12
+    workflow goal — no separate intake mechanism was built; one already
+    existed and does the job.
+58. **(Sprint 15)** Code Planning Engine detail (affected/new files,
+    DB/API/UI/doc/test implications) is a richer instruction inside the
+    existing `### MILESTONE:` free-text description, not a new parsed
+    field — zero parser/schema risk to add it.
+59. **(Sprint 15)** Developer/Reviewer "read existing files" and "risk
+    level" instructions (already present in `agents/*.md` since Sprint
+    3) are grounded with real Knowledge Graph retrieval
+    (`_related_project_code()`, real `analyze_impact()` data) — the
+    prompts didn't need to change, the agents needed something real to
+    act on them with.
+60. **(Sprint 15)** The Documentation Engine runs as a standalone real
+    LLM call (`app/ai/orchestration/documentation.py`), not a fifth
+    orchestrated `agent_tasks` role — avoids the one kind of migration
+    (widening `agent_role`'s CHECK constraint) every sprint since 11 has
+    deliberately avoided in favor of additive columns.
+61. **(Sprint 15)** Generated documentation is strictly grounded in
+    real, already-known facts (goal/milestones/files-changed/test
+    result) — the model is never given room to invent what happened;
+    missing an API key/role fails silently (`None`, logged) rather than
+    blocking feature completion or fabricating a summary.
+62. **(Sprint 15)** `PROJECT_MEMORY.md`/`ARCHITECTURE.md` in the *open
+    user project* are appended to only if they already exist there —
+    never assumed, since an arbitrary project has no reason to follow
+    this app's own documentation convention. `CHANGELOG.md` and a
+    per-feature doc file are always written.
+63. **(Sprint 15)** Rollback is per-task, matching the existing per-task
+    Apply granularity — not a whole-workflow atomic transaction.
+    `file_snapshots` records the real pre-apply content once per (task,
+    file), captured by Electron (never the backend, per Sprint 5) and
+    sent alongside the same `mark-files-applied` call that already
+    existed.
+64. **(Sprint 15)** The manual per-file Apply button now also calls
+    `mark-files-applied` with a real snapshot (previously it only
+    tracked "applied" in local UI state) — closes a real, pre-existing
+    gap where Sprint 14's architecture-change recording and this
+    sprint's rollback baseline silently never fired outside Fully
+    Automatic mode.
+65. **(Sprint 15)** The Test Engine reuses Sprint 13's real
+    `build.runTests()` — no new test-execution mechanism — triggered
+    once per completed workflow only when a real test script was
+    detected, never a button/action that would just fail.
+66. **(Sprint 15)** `files_removed` in the Feature Approval summary is
+    always `[]`, returned explicitly rather than omitted: the Developer
+    agent has no mechanism to propose a deletion (Sprint 11's locked
+    ```` ```file:path``` ```` format), so the summary states that
+    honestly instead of silently implying deletions were checked for.
 
 ---
 

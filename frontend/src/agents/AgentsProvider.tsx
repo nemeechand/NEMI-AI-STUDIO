@@ -68,13 +68,60 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
     [refresh],
   );
 
-  const applyProposedFile = useCallback(async (rootPath: string, file: ProposedFile) => {
-    await window.nemi.fs.writeFile(joinPath(rootPath, file.path), file.content);
-  }, []);
+  // Sprint 15's Safe Change Engine: captures the file's real current
+  // content (or null if it doesn't exist yet) BEFORE overwriting it, and
+  // reports that to the backend as this task's rollback baseline for
+  // this file — the same real snapshot the Fully-Automatic apply path
+  // (WorkflowsProvider) records, now also for the manual per-file Apply
+  // button every approval mode's Dashboard uses.
+  const applyProposedFile = useCallback(
+    async (rootPath: string, taskId: string, file: ProposedFile) => {
+      const fullPath = joinPath(rootPath, file.path);
+      const previousContent = await window.nemi.fs.readFile(fullPath).catch(() => null);
+      await window.nemi.fs.writeFile(fullPath, file.content);
+      await window.nemi.agents.markFilesApplied(taskId, [{ path: file.path, previousContent }]);
+    },
+    [],
+  );
+
+  const rollbackTask = useCallback(
+    async (rootPath: string, taskId: string) => {
+      const info = await window.nemi.agents.getRollbackInfo(taskId);
+      for (const file of info.files) {
+        const fullPath = joinPath(rootPath, file.path);
+        if (file.previous_content === null) {
+          await window.nemi.fs.deleteEntry(fullPath).catch(() => {});
+        } else {
+          await window.nemi.fs.writeFile(fullPath, file.previous_content);
+        }
+      }
+      await window.nemi.agents.markRolledBack(taskId);
+      await refresh();
+    },
+    [refresh],
+  );
 
   const value = useMemo<AgentsContextValue>(
-    () => ({ agents, tasks, createPipeline, cancelTask, retryTask, applyProposedFile, refresh }),
-    [agents, tasks, createPipeline, cancelTask, retryTask, applyProposedFile, refresh],
+    () => ({
+      agents,
+      tasks,
+      createPipeline,
+      cancelTask,
+      retryTask,
+      applyProposedFile,
+      rollbackTask,
+      refresh,
+    }),
+    [
+      agents,
+      tasks,
+      createPipeline,
+      cancelTask,
+      retryTask,
+      applyProposedFile,
+      rollbackTask,
+      refresh,
+    ],
   );
 
   return <AgentsContext.Provider value={value}>{children}</AgentsContext.Provider>;

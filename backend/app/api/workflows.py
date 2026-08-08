@@ -4,13 +4,21 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.api.schemas import WorkflowCreate, WorkflowDetailOut, WorkflowOut
+from app.api.schemas import (
+    FeatureSummaryOut,
+    TestResultIn,
+    WorkflowCreate,
+    WorkflowDetailOut,
+    WorkflowOut,
+)
 from app.core.config import get_settings
 from app.db.connection import get_connection
 from app.db.repositories.agent_tasks_repository import AgentTasksRepository
+from app.db.repositories.files_repository import FilesRepository
 from app.db.repositories.history_repository import HistoryRepository
 from app.db.repositories.milestones_repository import MilestonesRepository
 from app.db.repositories.workflows_repository import WorkflowsRepository
+from app.knowledge.analysis import analyze_impact
 
 router = APIRouter(prefix="/workflows")
 
@@ -145,6 +153,94 @@ def restart_workflow(workflow_id: str) -> dict[str, Any]:
         workflow = workflows_repo.get(workflow_id)
         _record(connection, workflow, "restarted")
         return workflow  # type: ignore[return-value]
+
+
+@router.post("/{workflow_id}/test-result", response_model=WorkflowOut)
+def record_test_result(workflow_id: str, payload: TestResultIn) -> dict[str, Any]:
+    """Sprint 15's Test Engine: Electron reports the real outcome of
+    actually running the open project's test suite (`build.runTests()`,
+    Sprint 13) — the backend never executes the user's project itself,
+    only records what happened."""
+    settings = get_settings()
+    with get_connection(settings) as connection:
+        repo = WorkflowsRepository(connection)
+        workflow = repo.get(workflow_id)
+        if workflow is None:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        repo.set_test_result(
+            workflow_id,
+            passed=payload.passed,
+            exit_code=payload.exit_code,
+            output_tail=payload.output_tail,
+        )
+        HistoryRepository(connection).record(
+            project_id=workflow["project_id"],
+            entity_type="workflow",
+            entity_id=workflow_id,
+            action="updated",
+            snapshot={"test_passed": payload.passed, "exit_code": payload.exit_code},
+        )
+        return repo.get(workflow_id)  # type: ignore[return-value]
+
+
+@router.get("/{workflow_id}/summary", response_model=FeatureSummaryOut)
+def get_feature_summary(workflow_id: str) -> dict[str, Any]:
+    """Sprint 15's Feature Approval summary — real data assembled from
+    this workflow's own tasks, never an LLM's self-report. "Changed" vs
+    "created" is a real, honestly-scoped heuristic: a proposed path that
+    was already in the Knowledge Graph's file index (Sprint 14) before
+    this workflow ran is "changed"; anything else is "created" — accurate
+    as long as the project was indexed before the feature ran, stated as
+    a heuristic rather than a guarantee."""
+    settings = get_settings()
+    with get_connection(settings) as connection:
+        workflow = WorkflowsRepository(connection).get(workflow_id)
+        if workflow is None:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        tasks = AgentTasksRepository(connection).list_for_workflow(workflow_id)
+        project_id = workflow["project_id"]
+        indexed_paths = (
+            {f["relative_path"] for f in FilesRepository(connection).list_for_project(project_id)}
+            if project_id
+            else set()
+        )
+
+        changed: list[str] = []
+        created: list[str] = []
+        seen: set[str] = set()
+        for task in tasks:
+            if task["agent_role"] != "developer":
+                continue
+            for proposed in task.get("proposed_files") or []:
+                path = proposed["path"]
+                if path in seen:
+                    continue
+                seen.add(path)
+                (changed if path in indexed_paths else created).append(path)
+
+        risk_levels: list[str] = []
+        if project_id:
+            for path in changed + created:
+                impact = analyze_impact(connection, project_id=project_id, file_path=path)
+                if impact.found:
+                    risk_levels.append(impact.risk_label)
+        if "high" in risk_levels:
+            overall_risk = "high"
+        elif "medium" in risk_levels:
+            overall_risk = "medium"
+        elif risk_levels:
+            overall_risk = "low"
+        else:
+            overall_risk = "unknown"
+
+        return {
+            "workflow_id": workflow_id,
+            "files_changed": changed,
+            "files_created": created,
+            "files_removed": [],
+            "test_result": workflow.get("last_test_result"),
+            "risk_level": overall_risk,
+        }
 
 
 def _record(connection: Any, workflow: dict[str, Any] | None, action_label: str) -> None:

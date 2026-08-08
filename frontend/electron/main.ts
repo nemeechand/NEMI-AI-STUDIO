@@ -47,19 +47,24 @@ import {
   cancelAgentTask,
   createAgentPipeline,
   getAgentTask,
+  getRollbackInfo,
   listAgentTasks,
   listAgents,
   markAgentTaskFilesApplied,
+  markAgentTaskRolledBack,
   retryAgentTask,
   runAgentCycle,
   type AgentRoleKey,
+  type FileSnapshotInput,
 } from './agent-client';
 import {
   cancelWorkflow,
   createWorkflow,
+  getFeatureSummary,
   getWorkflow,
   listWorkflows,
   pauseWorkflow,
+  recordTestResult,
   restartWorkflow,
   resumeWorkflow,
   type ApprovalMode,
@@ -273,8 +278,14 @@ ipcMain.handle(
 ipcMain.handle('agents:cancel-task', (_event, taskId: string) => cancelAgentTask(taskId));
 ipcMain.handle('agents:retry-task', (_event, taskId: string) => retryAgentTask(taskId));
 ipcMain.handle('agents:approve-task', (_event, taskId: string) => approveAgentTask(taskId));
-ipcMain.handle('agents:mark-files-applied', (_event, taskId: string) =>
-  markAgentTaskFilesApplied(taskId),
+ipcMain.handle(
+  'agents:mark-files-applied',
+  (_event, taskId: string, snapshots?: FileSnapshotInput[]) =>
+    markAgentTaskFilesApplied(taskId, snapshots),
+);
+ipcMain.handle('agents:get-rollback-info', (_event, taskId: string) => getRollbackInfo(taskId));
+ipcMain.handle('agents:mark-rolled-back', (_event, taskId: string) =>
+  markAgentTaskRolledBack(taskId),
 );
 
 ipcMain.handle('workflows:list', (_event, projectId: string | null) => listWorkflows(projectId));
@@ -297,6 +308,17 @@ ipcMain.handle('workflows:pause', (_event, workflowId: string) => pauseWorkflow(
 ipcMain.handle('workflows:resume', (_event, workflowId: string) => resumeWorkflow(workflowId));
 ipcMain.handle('workflows:cancel', (_event, workflowId: string) => cancelWorkflow(workflowId));
 ipcMain.handle('workflows:restart', (_event, workflowId: string) => restartWorkflow(workflowId));
+ipcMain.handle(
+  'workflows:record-test-result',
+  (
+    _event,
+    workflowId: string,
+    result: { passed: boolean; exitCode: number | null; outputTail: string | null },
+  ) => recordTestResult(workflowId, result),
+);
+ipcMain.handle('workflows:get-summary', (_event, workflowId: string) =>
+  getFeatureSummary(workflowId),
+);
 
 ipcMain.handle('system:resource-usage', () => getBackendResourceUsage());
 ipcMain.handle('system:get-metrics', (_event, projectPath: string) =>

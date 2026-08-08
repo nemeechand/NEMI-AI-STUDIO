@@ -277,6 +277,25 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
     """,
     "CREATE INDEX IF NOT EXISTS idx_embeddings_project_entity "
     "ON embeddings(project_id, entity_type)",
+    # Sprint 15: the Safe Change Engine's rollback baseline. One row per
+    # (task, file) the first time that file is applied for that task —
+    # `previous_content` is the file's real on-disk content immediately
+    # before the overwrite (captured by Electron, since the backend never
+    # reads/writes the open project's files itself — Sprint 5's Filesystem
+    # Ownership rule), or NULL if the file did not exist yet, meaning a
+    # rollback should delete it rather than restore old content.
+    """
+    CREATE TABLE IF NOT EXISTS file_snapshots (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES agent_tasks(id),
+        project_id TEXT REFERENCES projects(id),
+        relative_path TEXT NOT NULL,
+        previous_content TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (task_id, relative_path)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_file_snapshots_task_id ON file_snapshots(task_id)",
 )
 
 
@@ -324,4 +343,18 @@ def init_db(connection: sqlite3.Connection) -> None:
     # model output rather than fabricated "reasoning". Cleared back to
     # NULL once the task completes (result_summary takes over).
     _add_column_if_missing(connection, "agent_tasks", "live_output", "TEXT")
+    # Sprint 15: the Safe Change Engine's rollback marker — set when a
+    # task's applied files have been restored to their pre-apply state
+    # (see file_snapshots above). Deliberately reuses `proposed_files_applied`
+    # (reset to 0 on rollback) rather than adding a parallel status enum.
+    _add_column_if_missing(connection, "agent_tasks", "rolled_back_at", "TEXT")
+    # Sprint 15: the Documentation Engine's output — a real, grounded
+    # Markdown summary generated once a workflow completes (see
+    # app/ai/orchestration/documentation.py), and the Test Engine's real
+    # pass/fail result from actually running the open project's test
+    # suite. Both nullable: neither blocks a feature from completing if
+    # unavailable (no API key, no test script detected).
+    _add_column_if_missing(connection, "workflows", "documentation", "TEXT")
+    _add_column_if_missing(connection, "workflows", "documentation_generated_at", "TEXT")
+    _add_column_if_missing(connection, "workflows", "last_test_result", "TEXT")
     connection.commit()

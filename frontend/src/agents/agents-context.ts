@@ -13,7 +13,8 @@ export interface AgentsContextValue {
   }) => Promise<AgentTask[]>;
   cancelTask: (taskId: string) => Promise<void>;
   retryTask: (taskId: string) => Promise<void>;
-  applyProposedFile: (projectPath: string, file: ProposedFile) => Promise<void>;
+  applyProposedFile: (projectPath: string, taskId: string, file: ProposedFile) => Promise<void>;
+  rollbackTask: (projectPath: string, taskId: string) => Promise<void>;
   refresh: () => Promise<void>;
 }
 

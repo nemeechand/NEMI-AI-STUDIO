@@ -150,16 +150,33 @@ declare global {
     proposed_files_applied: boolean;
     conflict_warning: string | null;
     live_output: string | null;
+    rolled_back_at: string | null;
     created_at: string;
     updated_at: string;
     started_at: string | null;
     completed_at: string | null;
   }
 
+  interface FileSnapshotInput {
+    path: string;
+    previousContent: string | null;
+  }
+
+  interface RollbackFile {
+    path: string;
+    previous_content: string | null;
+  }
+
+  interface RollbackInfo {
+    task_id: string;
+    files: RollbackFile[];
+  }
+
   type WorkflowStatus =
     'planning' | 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
   type ApprovalMode = 'auto' | 'review' | 'manual';
   type MilestoneStatus = 'pending' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  type RiskLevel = 'low' | 'medium' | 'high' | 'unknown';
 
   interface Milestone {
     id: string;
@@ -170,6 +187,13 @@ declare global {
     status: MilestoneStatus;
     created_at: string;
     updated_at: string;
+  }
+
+  interface TestResult {
+    passed: boolean;
+    exit_code: number | null;
+    output_tail: string | null;
+    ran_at: string;
   }
 
   interface Workflow {
@@ -183,6 +207,9 @@ declare global {
     model: string;
     conversation_id: string | null;
     error_message: string | null;
+    documentation: string | null;
+    documentation_generated_at: string | null;
+    last_test_result: TestResult | null;
     created_at: string;
     updated_at: string;
     started_at: string | null;
@@ -192,6 +219,15 @@ declare global {
   interface WorkflowDetail extends Workflow {
     milestones: Milestone[];
     tasks: AgentTask[];
+  }
+
+  interface FeatureSummary {
+    workflow_id: string;
+    files_changed: string[];
+    files_created: string[];
+    files_removed: string[];
+    test_result: TestResult | null;
+    risk_level: RiskLevel;
   }
 
   interface ResourceUsage {
@@ -495,7 +531,9 @@ declare global {
         cancelTask: (taskId: string) => Promise<void>;
         retryTask: (taskId: string) => Promise<AgentTask>;
         approveTask: (taskId: string) => Promise<AgentTask>;
-        markFilesApplied: (taskId: string) => Promise<AgentTask>;
+        markFilesApplied: (taskId: string, snapshots?: FileSnapshotInput[]) => Promise<AgentTask>;
+        getRollbackInfo: (taskId: string) => Promise<RollbackInfo>;
+        markRolledBack: (taskId: string) => Promise<AgentTask>;
         onTasksChanged: (callback: () => void) => () => void;
       };
       workflows: {
@@ -513,6 +551,11 @@ declare global {
         resume: (workflowId: string) => Promise<Workflow>;
         cancel: (workflowId: string) => Promise<Workflow>;
         restart: (workflowId: string) => Promise<Workflow>;
+        recordTestResult: (
+          workflowId: string,
+          result: { passed: boolean; exitCode: number | null; outputTail: string | null },
+        ) => Promise<Workflow>;
+        getSummary: (workflowId: string) => Promise<FeatureSummary>;
       };
       system: {
         getResourceUsage: () => Promise<ResourceUsage | null>;

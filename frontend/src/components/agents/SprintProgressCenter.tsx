@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, MessageSquare, Pause, Play, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, MessageSquare, Pause, Play, X } from 'lucide-react';
 import { useAi } from '../../ai/useAi';
 import { useWorkflows } from '../../workflows/useWorkflows';
 import {
@@ -14,6 +14,19 @@ import {
 const LOG_POLL_INTERVAL_MS = 5000;
 const RESOURCE_POLL_INTERVAL_MS = 5000;
 const LOG_LIMIT = 30;
+
+const RISK_LABEL: Record<RiskLevel, string> = {
+  low: 'Low risk',
+  medium: 'Medium risk',
+  high: 'High risk',
+  unknown: 'Risk unknown',
+};
+const RISK_CLASS: Record<RiskLevel, string> = {
+  low: 'text-success',
+  medium: 'text-warning',
+  high: 'text-danger',
+  unknown: 'text-fg-muted',
+};
 
 function formatDuration(ms: number): string {
   const totalSeconds = Math.round(ms / 1000);
@@ -48,6 +61,19 @@ export function SprintProgressCenter({ workflow }: SprintProgressCenterProps) {
   const { openConversation } = useAi();
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [resourceUsage, setResourceUsage] = useState<ResourceUsage | null>(null);
+  const [summary, setSummary] = useState<FeatureSummary | null>(null);
+  const [documentationOpen, setDocumentationOpen] = useState(false);
+
+  // Sprint 15's Feature Approval summary — real data assembled server-side
+  // from this workflow's own tasks/snapshots/test result (see
+  // GET /workflows/{id}/summary), re-fetched whenever the task count
+  // changes since that's what the summary is derived from.
+  useEffect(() => {
+    window.nemi.workflows
+      .getSummary(workflow.id)
+      .then(setSummary)
+      .catch(() => setSummary(null));
+  }, [workflow.id, workflow.tasks.length]);
 
   useEffect(() => {
     // The backend's Python `logging` module output (which is where the
@@ -241,6 +267,54 @@ export function SprintProgressCenter({ workflow }: SprintProgressCenterProps) {
           })}
         </div>
       )}
+
+      {summary &&
+        (summary.files_changed.length > 0 ||
+          summary.files_created.length > 0 ||
+          summary.test_result ||
+          workflow.documentation) && (
+          <div className="space-y-1.5 rounded border border-border px-2 py-1.5">
+            <div className="flex items-center justify-between">
+              <p className="font-medium text-fg">Feature summary</p>
+              <span className={`text-[10px] font-medium ${RISK_CLASS[summary.risk_level]}`}>
+                {RISK_LABEL[summary.risk_level]}
+              </span>
+            </div>
+            <p className="text-[11px] text-fg-muted">
+              {summary.files_created.length} file(s) created, {summary.files_changed.length} changed
+              {summary.files_removed.length > 0 ? `, ${summary.files_removed.length} removed` : ''}.
+            </p>
+            {summary.test_result ? (
+              <p
+                className={`text-[11px] ${summary.test_result.passed ? 'text-success' : 'text-danger'}`}
+              >
+                Tests {summary.test_result.passed ? 'passed' : 'failed'}
+                {summary.test_result.exit_code !== null
+                  ? ` (exit code ${summary.test_result.exit_code})`
+                  : ''}
+              </p>
+            ) : (
+              <p className="text-[11px] text-fg-muted">Tests: not run.</p>
+            )}
+            {workflow.documentation && (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setDocumentationOpen((prev) => !prev)}
+                  className="flex items-center gap-1 text-[11px] text-accent hover:underline"
+                >
+                  {documentationOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                  Documentation generated
+                </button>
+                {documentationOpen && (
+                  <pre className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap rounded border border-border bg-surface px-1.5 py-1 text-[10px] text-fg-muted">
+                    {workflow.documentation}
+                  </pre>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
       {logs.length > 0 && (
         <div>

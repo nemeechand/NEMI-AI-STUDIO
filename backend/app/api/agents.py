@@ -11,11 +11,14 @@ from app.api.schemas import (
     AgentRunCycleRequest,
     AgentRunCycleResult,
     AgentTaskOut,
+    MarkFilesAppliedRequest,
+    RollbackInfoOut,
 )
 from app.core.config import get_settings
 from app.db.connection import get_connection
 from app.db.repositories.agent_tasks_repository import AgentTasksRepository
 from app.db.repositories.agents_repository import AgentsRepository
+from app.db.repositories.file_snapshots_repository import FileSnapshotsRepository
 from app.db.repositories.knowledge_repository import KnowledgeRepository
 from app.db.repositories.memory_repository import MemoryRepository
 
@@ -117,12 +120,18 @@ def approve_task(task_id: str) -> dict[str, Any]:
 
 
 @router.post("/tasks/{task_id}/mark-files-applied", response_model=AgentTaskOut)
-def mark_files_applied(task_id: str) -> dict[str, Any]:
+def mark_files_applied(task_id: str, payload: MarkFilesAppliedRequest) -> dict[str, Any]:
     """Called by Electron main after it has actually written a Developer
     task's proposed files to disk (manually via the Dashboard's Apply
     button, or automatically under Human Approval Mode = Fully Automatic)
     — the backend never writes files itself (Sprint 5's locked Filesystem
-    Ownership decision), it only records that it happened."""
+    Ownership decision), it only records that it happened.
+
+    Sprint 15's Safe Change Engine: `payload.snapshots` carries each
+    file's real on-disk content from immediately before Electron
+    overwrote it (or null if the file didn't exist), captured client-side
+    for the same filesystem-ownership reason. Stored once per (task,
+    file) as the Rollback System's restore target."""
     settings = get_settings()
     with get_connection(settings) as connection:
         repo = AgentTasksRepository(connection)
@@ -130,10 +139,54 @@ def mark_files_applied(task_id: str) -> dict[str, Any]:
         if not repo.mark_files_applied(task_id):
             raise HTTPException(status_code=404, detail="Task not found")
         result = repo.get(task_id)
-        if task_before is not None and task_before.get("proposed_files"):
-            _record_architecture_change(connection, task_before)
+        if task_before is not None:
+            snapshots_repo = FileSnapshotsRepository(connection)
+            for snapshot in payload.snapshots:
+                snapshots_repo.create_if_missing(
+                    task_id=task_id,
+                    project_id=task_before["project_id"],
+                    relative_path=snapshot.path,
+                    previous_content=snapshot.previous_content,
+                )
+            if task_before.get("proposed_files"):
+                _record_architecture_change(connection, task_before)
         connection.commit()
         return result  # type: ignore[return-value]
+
+
+@router.get("/tasks/{task_id}/rollback-info", response_model=RollbackInfoOut)
+def get_rollback_info(task_id: str) -> dict[str, Any]:
+    """What Electron needs to actually restore this task's files to how
+    they were before it was applied — the backend only ever returns the
+    recorded data; the writes/deletes happen client-side (Sprint 5's
+    Filesystem Ownership rule), confirmed afterward via mark-rolled-back."""
+    settings = get_settings()
+    with get_connection(settings) as connection:
+        task = AgentTasksRepository(connection).get(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        snapshots = FileSnapshotsRepository(connection).list_for_task(task_id)
+    if not snapshots:
+        raise HTTPException(
+            status_code=404, detail="No rollback information recorded for this task"
+        )
+    return {
+        "task_id": task_id,
+        "files": [
+            {"path": s["relative_path"], "previous_content": s["previous_content"]}
+            for s in snapshots
+        ],
+    }
+
+
+@router.post("/tasks/{task_id}/mark-rolled-back", response_model=AgentTaskOut)
+def mark_rolled_back(task_id: str) -> dict[str, Any]:
+    settings = get_settings()
+    with get_connection(settings) as connection:
+        repo = AgentTasksRepository(connection)
+        if not repo.mark_rolled_back(task_id):
+            raise HTTPException(status_code=404, detail="Task not found")
+        return repo.get(task_id)  # type: ignore[return-value]
 
 
 def _record_architecture_change(connection: Any, task: dict[str, Any]) -> None:

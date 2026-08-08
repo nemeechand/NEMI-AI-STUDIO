@@ -7,6 +7,7 @@ from typing import Any
 
 from app.ai.agent_roles import load_agent_roles
 from app.ai.errors import MissingApiKeyError, ProviderError
+from app.ai.orchestration.documentation import generate_feature_documentation
 from app.ai.orchestration.project_manager import (
     _MILESTONE_PIPELINE,
     MILESTONE_FORMAT_INSTRUCTION,
@@ -27,6 +28,7 @@ from app.db.repositories.knowledge_repository import KnowledgeRepository
 from app.db.repositories.memory_repository import MemoryRepository
 from app.db.repositories.milestones_repository import MilestonesRepository, MilestoneStatus
 from app.db.repositories.workflows_repository import WorkflowsRepository
+from app.knowledge.analysis import analyze_impact
 
 # Sprint 13: how often (seconds) a running task's accumulated streamed
 # text is flushed to `agent_tasks.live_output` for the AI Thinking Panel
@@ -104,7 +106,7 @@ async def _run_task(settings: Settings, task_id: str, api_keys: dict[str, str]) 
         _handle_failure(settings, task_id, "An unexpected error occurred.")
     finally:
         if task["workflow_id"]:
-            _sync_workflow_progress(settings, task["workflow_id"])
+            await _sync_workflow_progress(settings, task["workflow_id"], api_keys)
 
 
 def _handle_failure(settings: Settings, task_id: str, message: str) -> None:
@@ -199,6 +201,47 @@ async def _execute(settings: Settings, task: dict[str, Any], api_keys: dict[str,
                     "repeating past mistakes and to plan more effectively):\n"
                     + "\n".join(f"- {line}" for line in experience)
                 )
+
+        # Sprint 15, Autonomous Coding: grounds the Developer's own
+        # "read existing files first / reuse existing modules / never
+        # duplicate code" rules (agents/developer.md) with real matches
+        # from the Knowledge Graph — a simple, honest keyword match
+        # against real indexed file/function/class labels, not claimed
+        # semantic understanding. Silently absent if the project hasn't
+        # been indexed (Sprint 14) yet.
+        if role_key == "developer" and task["project_id"]:
+            related = _related_project_code(connection, task["project_id"], task["description"])
+            if related:
+                user_content += (
+                    "\n\n---\n\nExisting project files/symbols that may already cover part of "
+                    "this (read and reuse before writing new code):\n"
+                    + "\n".join(f"- {line}" for line in related)
+                )
+
+        # Sprint 15, Review Engine: grounds the Reviewer's "Risk Level"
+        # judgment (agents/reviewer.md's own RESPONSE FORMAT already asks
+        # for one) with real Code Impact Analysis data for the files the
+        # immediately-preceding Developer stage proposed, rather than
+        # leaving it to guess from the diff text alone.
+        elif role_key == "reviewer" and task["project_id"] and task["depends_on_task_id"]:
+            dev_task = AgentTasksRepository(connection).get(task["depends_on_task_id"])
+            if dev_task and dev_task.get("proposed_files"):
+                impact_lines = []
+                for proposed in dev_task["proposed_files"]:
+                    impact = analyze_impact(
+                        connection, project_id=task["project_id"], file_path=proposed["path"]
+                    )
+                    if impact.found:
+                        impact_lines.append(
+                            f"{proposed['path']}: {impact.risk_label} risk "
+                            f"({len(impact.dependents)} file(s) depend on it)"
+                        )
+                if impact_lines:
+                    user_content += (
+                        "\n\n---\n\nReal dependency/risk data for the files under review "
+                        "(from the project's knowledge graph):\n"
+                        + "\n".join(f"- {line}" for line in impact_lines)
+                    )
 
         agent_row = AgentsRepository(connection).get_by_role_key(settings.agents_dir, role_key)
         conversation = ConversationsRepository(connection).create(
@@ -299,6 +342,34 @@ _STOPWORDS = {
     "the", "a", "an", "and", "or", "for", "to", "of", "in", "on", "with", "that", "this",
     "is", "are", "be", "it", "as", "at", "by", "from", "into", "using", "use", "add", "build",
 }
+
+
+def _related_project_code(
+    connection: Any, project_id: str, description: str, limit: int = 15
+) -> list[str]:
+    """Sprint 15: a real, bounded keyword match against the project's own
+    indexed files/functions/classes (Sprint 14's knowledge graph) — the
+    honest mechanism behind "read existing files first" / "avoid duplicate
+    code": genuine retrieval over real labels, not a claim that the model
+    understands the codebase. Returns nothing if the project hasn't been
+    indexed yet (an empty/missing graph is a real, not a fabricated,
+    absence of context)."""
+    words = {w for w in re.findall(r"[a-z0-9]+", description.lower()) if len(w) > 3} - _STOPWORDS
+    if not words:
+        return []
+    rows = connection.execute(
+        """
+        SELECT DISTINCT node_type, label FROM graph_nodes
+        WHERE project_id = ? AND node_type IN ('file', 'function', 'class')
+        """,
+        (project_id,),
+    ).fetchall()
+    matches = []
+    for row in rows:
+        label_lower = row["label"].lower()
+        if any(word in label_lower for word in words):
+            matches.append(f"{row['node_type']}: {row['label']}")
+    return matches[:limit]
 
 
 def _related_past_experience(connection: Any, goal_text: str, limit: int = 3) -> list[str]:
@@ -420,7 +491,9 @@ def _record_knowledge_for_workflow(connection: Any, workflow: dict[str, Any]) ->
     connection.commit()
 
 
-def _sync_workflow_progress(settings: Settings, workflow_id: str) -> None:
+async def _sync_workflow_progress(
+    settings: Settings, workflow_id: str, api_keys: dict[str, str]
+) -> None:
     """Re-derives milestone and workflow status from their underlying
     agent_tasks' real statuses after every task transition — a workflow
     already in a terminal state (completed/failed/cancelled) is left
@@ -464,6 +537,16 @@ def _sync_workflow_progress(settings: Settings, workflow_id: str) -> None:
             workflows_repo.set_status(workflow_id, "completed")
             _record_workflow_history(connection, workflow, "completed")
             _record_sprint_summary_memory(connection, workflow, milestones, tasks)
+            # Sprint 15's Documentation Engine: generated once per workflow
+            # (documentation_generated_at is unset until this succeeds, so
+            # a straggling task or a later poll never re-triggers it).
+            if not workflow.get("documentation_generated_at"):
+                documentation = await generate_feature_documentation(
+                    settings, connection, workflow=workflow, milestones=milestones,
+                    tasks=tasks, api_keys=api_keys,
+                )
+                if documentation:
+                    workflows_repo.set_documentation(workflow_id, documentation)
         elif "failed" in all_statuses:
             workflows_repo.set_status(
                 workflow_id,

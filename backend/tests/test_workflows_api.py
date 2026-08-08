@@ -348,7 +348,9 @@ def test_mark_files_applied_via_api(client: TestClient) -> None:
         },
     ).json()
 
-    response = client.post(f"/agents/tasks/{tasks[0]['id']}/mark-files-applied")
+    response = client.post(
+        f"/agents/tasks/{tasks[0]['id']}/mark-files-applied", json={"snapshots": []}
+    )
     assert response.status_code == 200
     assert response.json()["proposed_files_applied"] is True
 

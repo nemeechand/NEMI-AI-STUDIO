@@ -40,6 +40,16 @@ function buildNodes(workflow: WorkflowDetail | null): Node[] {
 
   const goalState: NodeState = 'done'; // the goal always exists once a workflow exists
   const completedState: NodeState = workflow.status === 'completed' ? 'done' : 'pending';
+  // Sprint 15's Documentation Engine: genuinely automated once the workflow
+  // has real generated documentation (workflows.documentation, a real
+  // grounded LLM call — see app/ai/orchestration/documentation.py), not
+  // faked progress. Still shows "not yet automated" while the workflow
+  // hasn't completed, or if generation was skipped (no API key/role).
+  const documentationState: NodeState = workflow.documentation
+    ? 'done'
+    : workflow.status === 'completed'
+      ? 'not-automated'
+      : 'pending';
 
   return [
     { label: 'Goal', state: goalState },
@@ -47,7 +57,7 @@ function buildNodes(workflow: WorkflowDetail | null): Node[] {
     { label: 'Development', state: roleStatus('developer') },
     { label: 'Review', state: roleStatus('reviewer') },
     { label: 'Testing', state: roleStatus('tester') },
-    { label: 'Documentation', state: 'not-automated' },
+    { label: 'Documentation', state: documentationState },
     { label: 'Commit', state: 'not-automated' },
     { label: 'Push', state: 'not-automated' },
     { label: 'Completed', state: completedState },

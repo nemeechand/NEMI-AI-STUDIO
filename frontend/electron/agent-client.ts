@@ -58,10 +58,26 @@ export interface AgentTask {
   proposed_files_applied: boolean;
   conflict_warning: string | null;
   live_output: string | null;
+  rolled_back_at: string | null;
   created_at: string;
   updated_at: string;
   started_at: string | null;
   completed_at: string | null;
+}
+
+export interface FileSnapshotInput {
+  path: string;
+  previousContent: string | null;
+}
+
+export interface RollbackFile {
+  path: string;
+  previous_content: string | null;
+}
+
+export interface RollbackInfo {
+  task_id: string;
+  files: RollbackFile[];
 }
 
 export function listAgents(): Promise<AgentInfo[]> {
@@ -113,8 +129,25 @@ export function approveAgentTask(taskId: string): Promise<AgentTask> {
   return requestJson(`/agents/tasks/${encodeURIComponent(taskId)}/approve`, { method: 'POST' });
 }
 
-export function markAgentTaskFilesApplied(taskId: string): Promise<AgentTask> {
+export function markAgentTaskFilesApplied(
+  taskId: string,
+  snapshots: FileSnapshotInput[] = [],
+): Promise<AgentTask> {
   return requestJson(`/agents/tasks/${encodeURIComponent(taskId)}/mark-files-applied`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      snapshots: snapshots.map((s) => ({ path: s.path, previous_content: s.previousContent })),
+    }),
+  });
+}
+
+export function getRollbackInfo(taskId: string): Promise<RollbackInfo> {
+  return requestJson(`/agents/tasks/${encodeURIComponent(taskId)}/rollback-info`);
+}
+
+export function markAgentTaskRolledBack(taskId: string): Promise<AgentTask> {
+  return requestJson(`/agents/tasks/${encodeURIComponent(taskId)}/mark-rolled-back`, {
     method: 'POST',
   });
 }

@@ -142,8 +142,30 @@ class AgentTasksRepository:
     def mark_files_applied(self, task_id: str) -> bool:
         now = datetime.now(UTC).isoformat()
         cursor = self._connection.execute(
-            "UPDATE agent_tasks SET proposed_files_applied = 1, updated_at = ? WHERE id = ?",
+            """
+            UPDATE agent_tasks
+            SET proposed_files_applied = 1, rolled_back_at = NULL, updated_at = ?
+            WHERE id = ?
+            """,
             (now, task_id),
+        )
+        self._connection.commit()
+        return cursor.rowcount > 0
+
+    def mark_rolled_back(self, task_id: str) -> bool:
+        """Sprint 15's Safe Change Engine: called once Electron has
+        actually restored (or deleted) every file recorded in this task's
+        `file_snapshots` — reverses `proposed_files_applied` so the
+        Dashboard's Apply/Reject/Rollback state reflects reality, and
+        stamps when it happened."""
+        now = datetime.now(UTC).isoformat()
+        cursor = self._connection.execute(
+            """
+            UPDATE agent_tasks
+            SET proposed_files_applied = 0, rolled_back_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (now, now, task_id),
         )
         self._connection.commit()
         return cursor.rowcount > 0

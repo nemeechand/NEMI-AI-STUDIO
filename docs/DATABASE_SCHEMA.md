@@ -1,7 +1,7 @@
 # DATABASE_SCHEMA.md
 
-Version: 1.3
-Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4); `projects` Repository Implemented (Sprint 7); `ai_conversations`/`ai_messages` Added and Implemented (Sprint 10)
+Version: 1.4
+Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4); `projects` Repository Implemented (Sprint 7); `ai_conversations`/`ai_messages` Added and Implemented (Sprint 10); `agent_tasks` Added and `memory` Repository Implemented (Sprint 11)
 Engine: SQLite
 
 ---
@@ -92,8 +92,11 @@ content storage. File content is always read from disk.
 | enabled      | INTEGER | NOT NULL DEFAULT 1        | boolean (0/1)                               |
 | created_at   | TEXT | NOT NULL                    |                                              |
 
-Seeded from `agents/*.md` at application start, not user-editable
-through normal UI flows.
+Seeded from `agents/*.md` at application start
+(`AgentsRepository.seed_from_role_files()`, Sprint 11), not
+user-editable through normal UI flows. Only four rows
+(`planner`/`developer`/`reviewer`/`tester`) participate in the
+automated task queue below; the rest remain reference roles.
 
 ## memory
 
@@ -108,6 +111,14 @@ through normal UI flows.
 | updated_at | TEXT | NOT NULL                                       |                                            |
 
 Index: `idx_memory_project_type` on `(project_id, type)`.
+
+**First real implementation: Sprint 11's agent-to-agent handoff.**
+`MemoryRepository.remember()`/`recall()`/`list_by_type()`
+(`backend/app/db/repositories/memory_repository.py`) use `type='task'`,
+`key=<completed task id>` to hand a pipeline stage's output to the
+next stage — durable across a backend restart mid-pipeline, unlike an
+in-memory handoff. The other four `type` values remain schema-ready
+for future use.
 
 ## logs
 
@@ -155,10 +166,21 @@ Append-only audit trail. Never updated or deleted by application code.
 | title      | TEXT | NOT NULL                | auto-generated from the first message, user-renameable |
 | provider   | TEXT | NOT NULL                | last-used provider id, e.g. "openai"        |
 | model      | TEXT | NOT NULL                | last-used model id                          |
+| agent_id   | TEXT |                          | nullable (Sprint 11) — set when this conversation was created by an orchestrated agent stage rather than a user-initiated chat |
+| task_id    | TEXT |                          | nullable (Sprint 11) — the `agent_tasks.id` this conversation belongs to, when `agent_id` is set |
 | created_at | TEXT | NOT NULL                |                                              |
 | updated_at | TEXT | NOT NULL                | bumped on every new message, drives conversation-list ordering |
 
 Index: `idx_ai_conversations_project_id` on `project_id`.
+
+`agent_id`/`task_id` are plain nullable columns, not foreign keys —
+added via `_add_column_if_missing()` (see IMPLEMENTATION STATUS's
+"Migration approach" note below) rather than a schema rewrite,
+following the same additive pattern `projects.last_opened_at`
+established in Sprint 7. They let the Chat
+Panel show an agent badge on agent-scoped conversations and let the
+Agents Dashboard jump from a task straight into the exact conversation
+that did its work.
 
 ## ai_messages (Sprint 10)
 
@@ -181,6 +203,36 @@ Index: `idx_ai_messages_conversation_id` on `conversation_id`.
 
 **API keys are never stored here or anywhere in SQLite** (see CONVENTIONS above) — they live in Electron's OS-level `safeStorage` and are supplied per-request; the backend is stateless with respect to credentials.
 
+## agent_tasks (Sprint 11)
+
+| Column             | Type    | Constraints                                                          | Notes                                        |
+|---------------------|---------|------------------------------------------------------------------------|--------------------------------------------------|
+| id                  | TEXT    | PRIMARY KEY                                                           |                                                    |
+| project_id          | TEXT    | FK → projects.id                                                      | nullable — null means a global (unscoped) task    |
+| title               | TEXT    | NOT NULL                                                              | shared across every stage of one pipeline         |
+| description         | TEXT    | NOT NULL                                                              | the goal, given to the Planner stage; later stages also receive the prior stage's output via `memory` |
+| agent_role          | TEXT    | NOT NULL, CHECK IN ('planner','developer','reviewer','tester')       | which of the four orchestrated roles runs this task |
+| status              | TEXT    | NOT NULL, CHECK IN ('queued','running','completed','failed','cancelled'), DEFAULT 'queued' |                     |
+| priority            | INTEGER | NOT NULL, DEFAULT 2                                                   | 1 (highest) – 4 (lowest), matches `AgentPipelineCreate`'s validated range |
+| depends_on_task_id  | TEXT    | FK → agent_tasks.id                                                   | nullable — null means runnable with no predecessor; a single link, not a graph (see ARCHITECTURE.md) |
+| provider            | TEXT    | NOT NULL                                                              | e.g. "ollama" — reuses Sprint 10's provider ids   |
+| model               | TEXT    | NOT NULL                                                              |                                                    |
+| conversation_id     | TEXT    | FK → ai_conversations.id                                              | nullable until the task actually starts executing |
+| retry_count         | INTEGER | NOT NULL, DEFAULT 0                                                   | incremented on each failed attempt                |
+| max_retries         | INTEGER | NOT NULL, DEFAULT 2                                                   | task gets up to `max_retries + 1` total attempts  |
+| result_summary      | TEXT    |                                                                        | nullable — the completed stage's output, also written to `memory` for the next stage |
+| proposed_files      | TEXT    |                                                                        | nullable, JSON-encoded array of `{path, content}` — Developer-stage output only, never auto-applied |
+| error_message       | TEXT    |                                                                        | nullable, populated on failure                    |
+| created_at          | TEXT    | NOT NULL                                                              |                                                    |
+| updated_at          | TEXT    | NOT NULL                                                              |                                                    |
+| started_at          | TEXT    |                                                                        | nullable                                          |
+| completed_at        | TEXT    |                                                                        | nullable — set on completion, failure, or cancellation |
+
+Indexes: `idx_agent_tasks_project_id` on `project_id`,
+`idx_agent_tasks_status` on `status` (drives
+`list_runnable()`'s scheduling query), `idx_agent_tasks_depends_on`
+on `depends_on_task_id`.
+
 ---
 
 # RELATIONSHIPS
@@ -192,14 +244,18 @@ projects 1---* memory           (project_id nullable)
 projects 1---* logs             (project_id nullable)
 projects 1---* history          (project_id nullable)
 projects 1---* ai_conversations (project_id nullable)
+projects 1---* agent_tasks      (project_id nullable)
 ai_conversations 1---* ai_messages
+ai_conversations 0..1---1 agent_tasks   (agent_tasks.conversation_id; nullable until execution starts)
+agent_tasks 0..1---* agent_tasks        (depends_on_task_id — a single link per task, not a graph)
 agents   (standalone, referenced by tasks.agent as a name, not a FK —
-          keeps task history readable even if an agent is later removed)
+          keeps task history readable even if an agent is later removed;
+          agent_tasks.agent_role is likewise a name, not a FK)
 ```
 
 ---
 
-# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7, Sprint 10)
+# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7, Sprint 10, Sprint 11)
 
 - Schema implemented exactly as designed above:
   `backend/app/db/schema.py::SCHEMA_STATEMENTS` /  `init_db()`.
@@ -214,17 +270,33 @@ agents   (standalone, referenced by tasks.agent as a name, not a FK —
 - Repository pattern: `LogsRepository`
   (`backend/app/db/repositories/logs_repository.py`), Sprint 7's
   `ProjectsRepository` (`record_opened()` upserts by `path`,
-  `list_recent()`, `delete()`), and, as of Sprint 10,
+  `list_recent()`, `delete()`), Sprint 10's
   `ConversationsRepository`/`MessagesRepository`
-  (`backend/app/db/repositories/ai_*.py`) back the `GET/POST /logs`,
+  (`backend/app/db/repositories/ai_*.py`), and, as of Sprint 11,
+  `AgentsRepository` (seeds/reads the `agents` table),
+  `AgentTasksRepository` (full CRUD plus the scheduling queries
+  `list_runnable()`/`mark_failed_or_retry()`/
+  `cascade_cancel_dependents()`), and `MemoryRepository` (`memory`'s
+  first real implementation) back the `GET/POST /logs`,
   `GET /projects/recent`/`POST /projects/opened`/`DELETE /projects/{id}`,
-  and `/ai/conversations*` APIs respectively. The remaining four tables
-  (`tasks`, `files`, `agents`, `settings`) plus the still-generic
-  `memory`/`history` tables are schema-ready but intentionally have no
+  `/ai/conversations*`, and `/agents*` APIs respectively. The
+  remaining two tables (`tasks`, `settings`) plus the still-generic
+  `history` table are schema-ready but intentionally have no
   repository or business logic yet; those arrive with the sprints that
   actually need them, per the Planner principle "database before
   business logic" — the schema had to exist first, but a table being
-  queryable doesn't mean its feature is built.
+  queryable doesn't mean its feature is built. Note `tasks` (Sprint 3
+  design, generic project task tracking) is distinct from Sprint 11's
+  `agent_tasks` (agent pipeline scheduling) — different tables for
+  different concerns, not a rename.
+- **`agent_tasks` is a new table added this sprint (Sprint 11)**, for
+  the same reason `ai_conversations`/`ai_messages` were added in
+  Sprint 10: a real, queryable, indexable shape (status, dependency
+  chain, retry bookkeeping) that a generic JSON-blob table can't
+  represent well. `ai_conversations` also gained two nullable columns,
+  `agent_id`/`task_id`, via `_add_column_if_missing()` (see below), so
+  a conversation created by an orchestrated agent stage can be
+  distinguished from a user-initiated chat and linked back to its task.
 - **`ai_conversations`/`ai_messages` are an intentional, justified
   extension beyond this document's original table list (Sprint 10)**:
   MASTER_SPECIFICATION.md's MEMORY SYSTEM section already anticipates

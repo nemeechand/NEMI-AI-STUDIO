@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, MessageSquare, Pencil, Trash2, X } from 'lucide-react';
+import { Bot, Check, MessageSquare, Pencil, Trash2, X } from 'lucide-react';
 import { useAi } from '../../ai/useAi';
 
 interface ConversationHistoryListProps {
@@ -34,7 +34,11 @@ export function ConversationHistoryList({ onClose }: ConversationHistoryListProp
             conversation.id === activeConversationId ? 'bg-accent/10' : 'hover:bg-surface'
           }`}
         >
-          <MessageSquare size={12} className="shrink-0 text-fg-muted" />
+          {conversation.agent_id ? (
+            <Bot size={12} className="shrink-0 text-accent" aria-label="Agent conversation" />
+          ) : (
+            <MessageSquare size={12} className="shrink-0 text-fg-muted" />
+          )}
           {renamingId === conversation.id ? (
             <>
               <input

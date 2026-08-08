@@ -35,6 +35,25 @@ class MessagesRepository:
             context_refs=context_refs,
         )
 
+    def add_system_message(self, *, conversation_id: str, content: str) -> dict[str, Any]:
+        """Sprint 11: persists an agent task's system prompt as part of
+        its conversation transcript, so opening the task's conversation
+        in the Chat Panel shows the full exchange, not just the visible
+        user/assistant turns — useful for understanding why an agent
+        behaved the way it did."""
+        return self._insert(
+            conversation_id=conversation_id,
+            role="system",
+            content=content,
+            provider=None,
+            model=None,
+            status="complete",
+            error_message=None,
+            prompt_tokens=None,
+            completion_tokens=None,
+            context_refs=None,
+        )
+
     def add_assistant_message(
         self,
         *,

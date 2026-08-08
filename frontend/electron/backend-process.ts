@@ -100,6 +100,34 @@ async function waitForHealthy(timeoutMs: number): Promise<void> {
 }
 
 /**
+ * A STARTUP_TIMEOUT_MS timeout means the backend didn't answer /health in
+ * time — not that it died (a real crash already nulls `child` via the
+ * 'exit' handler above, which this loop's `child` check picks up). A cold
+ * dev-mode start doing heavy first-import work (AI provider SDKs, Sprint
+ * 11's agent-role-file seeding) can legitimately outrun the timeout, so
+ * keep watching in the background and let the UI recover from "Backend
+ * Offline" once it actually comes up, instead of latching into a false
+ * error state for the rest of the session.
+ */
+async function watchForLateRecovery(): Promise<void> {
+  while (child && state === 'error') {
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    if (!child || state !== 'error') return;
+    try {
+      const response = await checkHealth();
+      if (response.ok) {
+        lastHealth = (await response.json()) as HealthResponse;
+        state = 'ready';
+        lastError = undefined;
+        return;
+      }
+    } catch {
+      // Still not accepting connections — keep watching.
+    }
+  }
+}
+
+/**
  * Refreshes the cached health snapshot in the background so uptime/version
  * shown to the renderer don't go stale between startup and the next call —
  * fire-and-forget, never throws (getBackendHealth() always returns the last
@@ -194,6 +222,7 @@ export function startBackend(electronDirname: string): void {
     .catch((error: unknown) => {
       state = 'error';
       lastError = error instanceof Error ? error.message : String(error);
+      void watchForLateRecovery();
     });
 }
 

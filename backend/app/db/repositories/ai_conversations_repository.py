@@ -13,17 +13,25 @@ class ConversationsRepository:
         self._connection = connection
 
     def create(
-        self, *, project_id: str | None, title: str, provider: str, model: str
+        self,
+        *,
+        project_id: str | None,
+        title: str,
+        provider: str,
+        model: str,
+        agent_id: str | None = None,
+        task_id: str | None = None,
     ) -> dict[str, Any]:
         conversation_id = str(uuid4())
         now = datetime.now(UTC).isoformat()
         self._connection.execute(
             """
             INSERT INTO ai_conversations
-                (id, project_id, title, provider, model, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (id, project_id, title, provider, model, agent_id, task_id,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (conversation_id, project_id, title, provider, model, now, now),
+            (conversation_id, project_id, title, provider, model, agent_id, task_id, now, now),
         )
         self._connection.commit()
         return self.get(conversation_id)  # type: ignore[return-value]

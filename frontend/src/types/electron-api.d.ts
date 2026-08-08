@@ -66,6 +66,8 @@ declare global {
     title: string;
     provider: string;
     model: string;
+    agent_id: string | null;
+    task_id: string | null;
     created_at: string;
     updated_at: string;
   }
@@ -107,6 +109,44 @@ declare global {
     requestId: string;
     event: AiStreamEventName;
     data: Record<string, unknown>;
+  }
+
+  interface AgentInfo {
+    id: string;
+    name: string;
+    role_file: string;
+    enabled: boolean;
+  }
+
+  type AgentRoleKey = 'planner' | 'developer' | 'reviewer' | 'tester';
+  type AgentTaskStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+  interface ProposedFile {
+    path: string;
+    content: string;
+  }
+
+  interface AgentTask {
+    id: string;
+    project_id: string | null;
+    title: string;
+    description: string;
+    agent_role: AgentRoleKey;
+    status: AgentTaskStatus;
+    priority: number;
+    depends_on_task_id: string | null;
+    provider: string;
+    model: string;
+    conversation_id: string | null;
+    retry_count: number;
+    max_retries: number;
+    result_summary: string | null;
+    proposed_files: ProposedFile[] | null;
+    error_message: string | null;
+    created_at: string;
+    updated_at: string;
+    started_at: string | null;
+    completed_at: string | null;
   }
 
   interface Window {
@@ -175,6 +215,23 @@ declare global {
         ) => Promise<void>;
         cancelMessage: (requestId: string) => Promise<boolean>;
         onStreamEvent: (callback: (payload: AiStreamEventPayload) => void) => () => void;
+      };
+      agents: {
+        list: () => Promise<AgentInfo[]>;
+        listTasks: (projectId: string | null) => Promise<AgentTask[]>;
+        getTask: (taskId: string) => Promise<AgentTask>;
+        createPipeline: (input: {
+          projectId: string | null;
+          title: string;
+          description: string;
+          provider: string;
+          model: string;
+          priority?: number;
+          stages?: AgentRoleKey[];
+        }) => Promise<AgentTask[]>;
+        cancelTask: (taskId: string) => Promise<void>;
+        retryTask: (taskId: string) => Promise<AgentTask>;
+        onTasksChanged: (callback: () => void) => () => void;
       };
     };
   }

@@ -392,6 +392,28 @@ Verified: tsc build, eslint (0 warnings), prettier (clean), vite build; pytest (
 
 Known limitation: only Ollama could be exercised with genuine live network calls in this environment (no OpenAI/Anthropic/Gemini API keys available) — those three providers' request/response mapping and error-normalization logic is implemented against each SDK's actual installed API surface (verified by inspection, not memory) and covered by non-network unit tests (e.g. the real `MissingApiKeyError` path), but a live call to each cloud provider has not been performed, stated honestly rather than overclaimed. Multi-agent orchestration (Planner/Developer/Reviewer/etc.) and semantic/embedding-based project indexing remain explicitly out of scope, not fabricated. Code-signing certificate for the installer remains the top Beta blocker, unaffected by this sprint.
 
+Sprint 11 — Completed (Agent Orchestration Framework)
+
+Goal:
+
+Build the first production-ready version of the multi-agent orchestration framework on top of Sprint 10's provider/context foundation: Planner/Developer/Reviewer/Tester agents, an Agent Manager, Agent Memory, an Agent Task Queue, an Agent Status Dashboard, agent-to-agent communication, parallel execution where safe, automatic retries, failure recovery, conversation and execution history, and a provider-independent architecture — integrated with the existing AI Chat Panel, Workspace, Monaco Editor, Project Manager, and Backend, without breaking Sprints 1–10.
+
+Delivered:
+
+Backend: `backend/app/ai/agent_roles.py` parses `agents/*.md` into system prompts (only `planner`/`developer`/`reviewer`/`tester` participate in the automated queue — `ORCHESTRATED_ROLES`), rewriting NEMI-self-referential text to refer to the user's project. New `agent_tasks` table (dependency-gated pipeline scheduling — see docs/DATABASE_SCHEMA.md) with `AgentTasksRepository` (`list_runnable()`, `mark_failed_or_retry()`, `cascade_cancel_dependents()`, `retry()`); `AgentsRepository` seeds the `agents` table from the role files at startup; `MemoryRepository` gives the schema-ready-since-Sprint-4 `memory` table its first real implementation, used for durable agent-to-agent handoff (`type='task'`). New `backend/app/ai/orchestration/manager.py`: a stateless `run_cycle()` that runs exactly one scheduling pass (no internal loop, no server-side API keys — preserving Sprint 10's "keys never persisted server-side" decision), executing up to `MAX_CONCURRENT_TASKS = 3` runnable tasks in parallel via `asyncio.gather`, calling Sprint 10's existing `AIProvider` abstraction directly (provider-independent by construction, not a second abstraction layer). Developer-stage file changes are parsed from fenced ` ```file:path``` ` blocks into `proposed_files` — parsed only, never auto-written to disk. New `backend/app/api/agents.py` (`GET /agents`, task CRUD, `POST /agents/run-cycle`).
+
+Electron: `agent-client.ts` mirrors `ai-client.ts`'s pattern for the new `window.nemi.agents.*` IPC surface. `main.ts` runs a 4-second `setInterval` that decrypts whatever provider keys `safeStorage` currently holds and calls `POST /agents/run-cycle` — the actual scheduling cadence, since the backend itself holds no loop and no keys.
+
+Frontend: new `agents/` Context+Provider+Hook module (`AgentsProvider.tsx` — task list with a 5-second backup poll alongside push-driven refresh, `createPipeline`/`cancelTask`/`retryTask`/`applyProposedFile`); shared `fetchWithStartupRetry` extracted from `AiProvider.tsx` into `lib/` so `AgentsProvider` doesn't duplicate the same mount-time backend-startup-race retry logic. New `components/agents/` — an Agents Dashboard sidebar panel (new `Sidebar.tsx` entry, task cards with role icon/status badge, expandable detail showing description/result/error, per-file Apply buttons for proposed files, Cancel/Retry actions gated by status) and a New Task modal (title/description/provider/model/priority/stage-checkboxes, defaulting to all four stages in order). `AiContextValue` gained `openConversation()` so the Dashboard can jump from a task straight into the exact conversation that did its work; `ai_conversations` gained nullable `agent_id`/`task_id` columns so agent-scoped conversations get a visible badge (Bot icon) in the Chat Panel's history list, distinct from user-initiated chats.
+
+Found and fixed one real bug during live verification: `backend-process.ts`'s `state` tracking latched permanently into `'error'` once the 15-second `STARTUP_TIMEOUT_MS` elapsed, even when the backend process was still alive and became healthy moments later (confirmed live — a cold dev-mode start doing heavy first-import work, worsened by this sprint's own added agent-role-file seeding at startup, legitimately took longer than 15s on a loaded machine) — the StatusBar would then show "Backend Offline" for the rest of the session even though every actual request kept working. Fixed with a background watcher that keeps polling after a startup timeout (while the child process is still alive, not after a genuine crash) and recovers `state` to `'ready'` once the backend actually responds.
+
+docs/ARCHITECTURE.md gained a new "AGENT ORCHESTRATION FRAMEWORK (locked — Sprint 11)" section, the IPC namespace list updated to six namespaces, six new locked-decision entries; docs/DATABASE_SCHEMA.md updated with the new `agent_tasks` table, `ai_conversations`'s two new columns, and `memory`'s first real implementation; docs/SPRINT_11_REPORT.md created.
+
+Verified: tsc build, eslint (0 warnings), prettier (clean), vite build; pytest (53 passed, 16 new — including a live end-to-end two-stage pipeline test against the real local Ollama model, skipped gracefully if Ollama isn't present rather than mocked), ruff check (all checks passed), mypy strict (0 issues, 47 source files). Live Playwright verification (real Ollama, no mocks), each suite reproduced clean: a full-pipeline suite (sequential planner→developer handoff via the real `memory` table, a deliberately-unresolvable-model pipeline exhausting automatic retries and cascade-cancelling its dependent stage, two independent single-stage pipelines observed `running` simultaneously, real UI form interaction creating a task and clicking Cancel through the actual Agents Dashboard, screenshots confirming correct rendering); a full Sprint 1–10 regression (Explorer file open via a real click, Recent Projects card opening a project through the real `ProjectContext.openProject()` flow, Monaco editor open/edit/Ctrl+S persisting to disk, a real AI Chat message sent and answered via Ollama) — all four confirmed intact after this sprint's shared-file changes.
+
+Known limitation: the tiny `qwen2.5:0.5b` Ollama model used for live testing does not reliably follow the exact ` ```file:path``` ` instruction format for Developer-stage proposed files (it produces plain code blocks instead) — this is a small-model instruction-following limitation, not a parser defect (`_extract_proposed_files()` was separately verified correct against a compliant string via a direct unit test), so the Apply-button flow is verified by parser unit test and UI wiring, not by an end-to-end proposed-file live capture in this environment. Only the four orchestrated roles (planner/developer/reviewer/tester) are scheduled — the remaining `agents/*.md` roles stay reference documents. A task's dependency is a single link, not a graph (linear chains only, no fan-out/fan-in). Code-signing certificate for the installer remains the top Beta blocker, unaffected by this sprint.
+
 ---
 
 # CURRENT STATUS
@@ -576,15 +598,23 @@ Sprint 1 Completed
 
 ✔ Sprint 10 Verified (tsc, eslint, prettier, vite build; pytest ×37 [13 new, incl. a live Ollama end-to-end test], ruff, mypy strict; 4 live Playwright suites — 14-point core AI, 14-point secondary (Settings/editor actions/file refs), 18-point full Sprint 1–9 regression, 6-point packaged-app spot-check — each reproduced clean at least twice)
 
+✔ Sprint 11 Completed — Agent Orchestration Framework
+
+✔ Multi-Agent Pipeline Implemented — Planner→Developer→Reviewer→Tester chained via a dependency-gated Agent Task Queue (`agent_tasks`), a stateless `run_cycle()` Agent Manager triggered externally by Electron every 4s (no server-side API keys, no internal loop), parallel execution of independent tasks (bounded, `MAX_CONCURRENT_TASKS = 3`), automatic retries (up to `max_retries + 1` attempts) with cascade-cancellation of dependents on permanent failure, agent-to-agent communication via the `memory` table's first real implementation, and an Agents Dashboard sidebar panel with a New Task modal, live status, and proposed-file Apply actions
+
+✔ Found and Fixed One Real Bug During Live Verification — `backend-process.ts`'s health `state` latched permanently into `'error'` after a 15s startup timeout even when the backend later became healthy (worsened by this sprint's own added startup-time role-file seeding); fixed with a background watcher that recovers `state` to `'ready'` once the still-alive process actually responds
+
+✔ Sprint 11 Verified (tsc, eslint, prettier, vite build; pytest ×53 [16 new, incl. a live two-stage Ollama pipeline test], ruff, mypy strict; live Playwright verification — full pipeline incl. retry/cascade/parallel-execution/real UI form interaction, plus a full Sprint 1–10 regression pass — reproduced clean)
+
 ---
 
 # PENDING TASKS
 
-Code-signing certificate for the installer (currently unsigned) — top remaining Beta blocker, unaffected by Sprint 10
+Code-signing certificate for the installer (currently unsigned) — top remaining Beta blocker, unaffected by Sprint 11
 
 Workflow Design
 
-Memory Engine
+Memory Engine (the schema-generic `long_term`/`knowledge`/`project`/`conversation` memory types remain unused — only `type='task'` has a real consumer, added this sprint)
 
 Plugin System
 
@@ -594,11 +624,13 @@ Testing Engine
 
 Build System
 
-Repositories/business logic for the remaining 6 tables (tasks, files, agents, memory, settings, history) — schema exists, repositories deferred to the sprints that need them; `projects` now has a repository (Sprint 7); `files` table remains intentionally unused (file content always comes from disk)
+Repositories/business logic for the remaining 2 tables (`tasks`, `settings`) plus the still-generic `history` audit table — schema exists, repositories deferred to the sprints that need them; `projects` (Sprint 7), `ai_conversations`/`ai_messages` (Sprint 10), and `agents`/`agent_tasks`/`memory` (Sprint 11) now have repositories; `files` table remains intentionally unused (file content always comes from disk)
 
 Resizable/drag panel splitters (sidebar and logger panel are currently show/hide toggles only)
 
-AI Chat Panel: location/pattern reserved in `docs/ARCHITECTURE.md` (Sprint 6) but not yet implemented — no `components/chat/`, `ai/`, or `window.nemi.ai.*` exists yet. The Code Editor half of that same reservation was resolved in Sprint 9 (Monaco)
+Proposed-file Apply flow has parser-unit-test + UI-wiring coverage but not an end-to-end live capture in this environment — the small local Ollama model used for testing doesn't reliably follow the exact ` ```file:path``` ` instruction format (a model instruction-following limitation, not a parser defect)
+
+Only four of the eight `agents/*.md` roles (planner/developer/reviewer/tester) are scheduled; the rest remain reference documents, not wired into the automated queue
 
 ---
 
@@ -762,17 +794,19 @@ Sprint 9 Completed — Professional Monaco Code Editor: `FileEditor.tsx`'s plain
 
 Sprint 10 Completed — AI Chat & Agent Framework: implements the AI layer reserved since Sprint 6 — AI Chat Panel (right sidebar) with a real four-provider abstraction (OpenAI, Claude/Anthropic, Gemini, Ollama, no mocks), SSE streaming end to end, conversation persistence scoped to the active project, `@file` references, code-selection-to-Ask-AI, Explain/Fix/Generate/Refactor Code editor actions with keybindings, token usage, cancellation, and graceful error handling; API keys encrypted via Electron `safeStorage`, never stored server-side; found and fixed four real bugs during live verification against a real locally-installed Ollama model (provider-list startup race, cancellation-before-first-chunk persisting the wrong status, an empty-model silent failure, and Monaco's context menu being unautomatable by Playwright — worked around with real keybindings) — verified via 4 live Playwright suites plus the full offline suite, each live suite reproduced clean at least twice; resolves the AI Chat Panel half of Sprint 6's reservation, completing it
 
+Sprint 11 Completed — Agent Orchestration Framework: builds the first production-ready multi-agent pipeline on Sprint 10's provider/context foundation — Planner/Developer/Reviewer/Tester chained via a dependency-gated Agent Task Queue (`agent_tasks`), a stateless externally-triggered Agent Manager (`run_cycle()`, no server-side API keys, no internal loop — Electron polls every 4s), parallel execution of independent tasks (bounded), automatic retries with cascade-cancellation of dependents on permanent failure, agent-to-agent communication via the `memory` table's first real implementation, human-gated Developer-stage file proposals (parsed, never auto-applied), and an Agents Dashboard sidebar panel with a New Task modal; found and fixed one real bug during live verification (backend health state latching permanently into "error" after a startup timeout even when the backend later recovered — fixed with a background late-recovery watcher) — verified via live Playwright pipeline testing (retry/cascade/parallel execution/real UI interaction) plus a full Sprint 1–10 regression pass and the full offline suite, each reproduced clean; resolves the agent orchestration work Sprint 10 explicitly deferred
+
 ---
 
 # NEXT MILESTONE
 
-Sprint 11
+Sprint 12
 
-Code-signing certificate for the installer — still the top remaining Beta blocker, unaffected by Sprint 10
-
-Agent orchestration (Planner → Developer → Reviewer → Tester per `agents/*.md`) — Sprint 10 built the chat/provider/context foundation this would run on top of
+Code-signing certificate for the installer — still the top remaining Beta blocker, unaffected by Sprint 11
 
 True concurrent multi-project support (simultaneous open projects, not just switching) — deliberately deferred in Sprint 7; would require a per-project filesystem watcher map and a multi-root Explorer UI
+
+Wiring the remaining four `agents/*.md` roles (architect, debugger, etc.) into the orchestration queue, and/or a richer dependency model beyond a single linear chain per pipeline — Sprint 11 deliberately scoped to the four core roles and linear chains only
 
 ---
 

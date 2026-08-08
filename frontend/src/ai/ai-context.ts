@@ -61,6 +61,11 @@ export interface AiContextValue {
     autoSend?: boolean;
   }) => void;
   onRequestOpenPanel: (listener: () => void) => () => void;
+
+  /** Opens the chat panel and switches straight to an existing
+   * conversation by id — used by the Agents Dashboard to jump from a
+   * task into the exact exchange that did its work. */
+  openConversation: (conversationId: string) => void;
 }
 
 export const AiContext = createContext<AiContextValue | null>(null);

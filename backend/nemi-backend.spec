@@ -11,7 +11,13 @@ a = Analysis(
     ['app/main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        # Sprint 11: agent role definitions, read at runtime to build each
+        # AI agent's system prompt (see app/core/config.py's
+        # _default_agents_dir) — bundled data, not code, so PyInstaller's
+        # static import analysis can't discover it on its own.
+        ('../agents', 'agents'),
+    ],
     hiddenimports=[
         # uvicorn selects its event loop / HTTP / websocket implementation
         # dynamically at runtime ("auto" detection) — PyInstaller's static

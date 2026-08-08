@@ -2,6 +2,7 @@ import { ThemeProvider } from './theme/ThemeProvider';
 import { ProjectProvider } from './project/ProjectProvider';
 import { WorkspaceProvider } from './workspace/WorkspaceProvider';
 import { AiProvider } from './ai/AiProvider';
+import { AgentsProvider } from './agents/AgentsProvider';
 import { AppShell } from './components/layout/AppShell';
 
 function App() {
@@ -10,7 +11,9 @@ function App() {
       <ProjectProvider>
         <WorkspaceProvider>
           <AiProvider>
-            <AppShell />
+            <AgentsProvider>
+              <AppShell />
+            </AgentsProvider>
           </AiProvider>
         </WorkspaceProvider>
       </ProjectProvider>

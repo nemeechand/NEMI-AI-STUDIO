@@ -18,6 +18,8 @@ export interface AiConversation {
   title: string;
   provider: string;
   model: string;
+  agent_id: string | null;
+  task_id: string | null;
   created_at: string;
   updated_at: string;
 }

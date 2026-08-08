@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useProject } from '../project/useProject';
+import { fetchWithStartupRetry } from '../lib/fetchWithStartupRetry';
 import {
   AiContext,
   type AiContextValue,
@@ -10,29 +11,6 @@ import { defaultModelFor } from './providerDefaults';
 
 const PROVIDER_STORAGE_KEY = 'nemi.ai.selectedProvider';
 const MODEL_STORAGE_KEY = 'nemi.ai.selectedModel';
-
-// Matches backend-process.ts's own STARTUP_TIMEOUT_MS (15s) as the ceiling
-// for "the backend is still starting, not actually broken" — the dev
-// backend (a cold `python -m app.main`, not the packaged PyInstaller exe)
-// can take several seconds to become reachable. Without retrying, a fetch
-// that loses this race on first app launch fails permanently: nothing else
-// ever re-triggers it, so the provider dropdown would stay empty for the
-// whole session even though the backend comes up moments later.
-const STARTUP_RETRY_ATTEMPTS = 10;
-const STARTUP_RETRY_DELAY_MS = 1500;
-
-async function fetchWithStartupRetry<T>(fn: () => Promise<T>): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < STARTUP_RETRY_ATTEMPTS; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, STARTUP_RETRY_DELAY_MS));
-    }
-  }
-  throw lastError;
-}
 
 function readStoredProvider(): string {
   return window.localStorage.getItem(PROVIDER_STORAGE_KEY) ?? 'ollama';
@@ -315,6 +293,14 @@ export function AiProvider({ children }: { children: ReactNode }) {
     [doSend, notifyOpenPanel],
   );
 
+  const openConversation = useCallback(
+    (conversationId: string) => {
+      setActiveConversationId(conversationId);
+      notifyOpenPanel();
+    },
+    [notifyOpenPanel],
+  );
+
   const conversationTokenTotals = useMemo<TokenUsageTotals>(() => {
     return activeMessages.reduce(
       (totals, message) => ({
@@ -365,6 +351,7 @@ export function AiProvider({ children }: { children: ReactNode }) {
       conversationTokenTotals,
       askAboutSelection,
       onRequestOpenPanel,
+      openConversation,
     }),
     [
       providers,
@@ -388,6 +375,7 @@ export function AiProvider({ children }: { children: ReactNode }) {
       conversationTokenTotals,
       askAboutSelection,
       onRequestOpenPanel,
+      openConversation,
     ],
   );
 

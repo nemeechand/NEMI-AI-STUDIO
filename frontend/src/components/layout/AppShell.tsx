@@ -12,6 +12,8 @@ import { GlobalSearch } from '../search/GlobalSearch';
 import { WorkspaceManager } from '../workspace/WorkspaceManager';
 import { NewProjectWizard } from '../workspace/NewProjectWizard';
 import { ChatPanel } from '../chat/ChatPanel';
+import { AgentsDashboard } from '../agents/AgentsDashboard';
+import { NewAgentTaskModal } from '../agents/NewAgentTaskModal';
 import { CommandPalette } from '../../commands/CommandPalette';
 import { useCommand } from '../../commands/useCommand';
 import { useWorkspace } from '../../workspace/useWorkspace';
@@ -26,6 +28,7 @@ export function AppShell() {
   const [aiChatVisible, setAiChatVisible] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [newAgentTaskOpen, setNewAgentTaskOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const { groups, splitDirection, split, unsplit, saveAll, reopenClosedTab, openFile } =
@@ -116,6 +119,15 @@ export function AppShell() {
     setAiChatVisible(true);
     newConversation();
   });
+  useCommand('agents.showDashboard', 'Agents: Show Dashboard', () => {
+    setSidebarVisible(true);
+    setSidebarPanel('agents');
+  });
+  useCommand('agents.newTask', 'Agents: New Task…', () => {
+    setSidebarVisible(true);
+    setSidebarPanel('agents');
+    setNewAgentTaskOpen(true);
+  });
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-surface text-fg">
@@ -138,8 +150,10 @@ export function AppShell() {
             <ProjectExplorer onOpenFile={openFile} onNewProject={() => setNewProjectOpen(true)} />
           ) : sidebarPanel === 'workspace' ? (
             <WorkspaceManager onNewProject={() => setNewProjectOpen(true)} />
-          ) : (
+          ) : sidebarPanel === 'search' ? (
             <GlobalSearch />
+          ) : (
+            <AgentsDashboard onNewTask={() => setNewAgentTaskOpen(true)} />
           ))}
         <div className="flex min-w-0 flex-1 flex-col">
           <main className="flex min-h-0 flex-1 overflow-auto">
@@ -175,6 +189,7 @@ export function AppShell() {
       <StatusBar />
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {newProjectOpen && <NewProjectWizard onClose={() => setNewProjectOpen(false)} />}
+      {newAgentTaskOpen && <NewAgentTaskModal onClose={() => setNewAgentTaskOpen(false)} />}
       {commandPaletteOpen && <CommandPalette onClose={() => setCommandPaletteOpen(false)} />}
       {quickOpenOpen && projectPath && <QuickOpen onClose={() => setQuickOpenOpen(false)} />}
     </div>

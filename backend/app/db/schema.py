@@ -128,6 +128,44 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation_id ON ai_messages(conversation_id)",
+    # Sprint 11: the agent orchestration task queue. One row per unit of
+    # work assigned to one of the four orchestrated roles (planner/
+    # developer/reviewer/tester — Architect/Debugger/Documentation/Release
+    # Manager exist in `agents` as chat-invokable personas but aren't part
+    # of the automated pipeline this sprint). `depends_on_task_id` chains
+    # a pipeline (Developer depends on its Planner, Reviewer on its
+    # Developer, ...) so the scheduler only starts a task once its
+    # dependency has actually completed.
+    """
+    CREATE TABLE IF NOT EXISTS agent_tasks (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id),
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        agent_role TEXT NOT NULL
+            CHECK (agent_role IN ('planner', 'developer', 'reviewer', 'tester')),
+        status TEXT NOT NULL
+            CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled'))
+            DEFAULT 'queued',
+        priority INTEGER NOT NULL DEFAULT 2,
+        depends_on_task_id TEXT REFERENCES agent_tasks(id),
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        conversation_id TEXT REFERENCES ai_conversations(id),
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        max_retries INTEGER NOT NULL DEFAULT 2,
+        result_summary TEXT,
+        proposed_files TEXT,
+        error_message TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_agent_tasks_project_id ON agent_tasks(project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status)",
+    "CREATE INDEX IF NOT EXISTS idx_agent_tasks_depends_on ON agent_tasks(depends_on_task_id)",
 )
 
 
@@ -150,4 +188,9 @@ def init_db(connection: sqlite3.Connection) -> None:
     for statement in SCHEMA_STATEMENTS:
         connection.execute(statement)
     _add_column_if_missing(connection, "projects", "last_opened_at", "TEXT")
+    # Sprint 11: a conversation can now be scoped to an agent persona
+    # (agent_id) and, when driven by the task queue rather than manual
+    # chat, to the specific task it's doing the work for (task_id).
+    _add_column_if_missing(connection, "ai_conversations", "agent_id", "TEXT")
+    _add_column_if_missing(connection, "ai_conversations", "task_id", "TEXT")
     connection.commit()

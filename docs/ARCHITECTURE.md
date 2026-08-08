@@ -1,8 +1,8 @@
 # ARCHITECTURE.md
 
-Version: 1.7
-Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8); Monaco Code Editor Locked (Sprint 9); AI Chat & Agent Framework Locked (Sprint 10)
-Governs: Sprint 10 onward
+Version: 1.8
+Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8); Monaco Code Editor Locked (Sprint 9); AI Chat & Agent Framework Locked (Sprint 10); Agent Orchestration Framework Locked (Sprint 11)
+Governs: Sprint 11 onward
 
 ---
 
@@ -143,23 +143,27 @@ Three processes, already implemented and hardened in Sprint 2:
 ## IPC Boundary (locked decision)
 
 All renderer → native calls go through `window.nemi`
-(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 10
-this surface has five namespaces: `windowControls` (Sprint 2),
+(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 11
+this surface has six namespaces: `windowControls` (Sprint 2),
 `backend` (Sprint 4: `health()`; Sprint 5: `logs()`), `fs`
 (Sprint 5: project/file CRUD + change notifications; Sprint 7:
 `selectDirectory()`, `createDirectory()`; Sprint 9: `listAllFiles()`
 for Quick Open, `searchInFiles()` for Global Search — same ownership
 as the rest of `fs`, see FILESYSTEM OWNERSHIP below), `projects`
-(Sprint 7: `listRecent()`, `recordOpened()`, `remove()`), and `ai`
+(Sprint 7: `listRecent()`, `recordOpened()`, `remove()`), `ai`
 (Sprint 10: `listProviders()`, `listOllamaModels()`, `hasApiKey()`/
 `setApiKey()`/`clearApiKey()`, `listConversations()`/
 `createConversation()`/`renameConversation()`/`deleteConversation()`/
 `listMessages()`, `sendMessage()`/`cancelMessage()`/`onStreamEvent()`
-— see AI CHAT & AGENT FRAMEWORK below). A component must never assume
+— see AI CHAT & AGENT FRAMEWORK below), and `agents` (Sprint 11:
+`list()`, `listTasks()`/`getTask()`, `createPipeline()`,
+`cancelTask()`/`retryTask()`, `onTasksChanged()` — see AGENT
+ORCHESTRATION FRAMEWORK below). A component must never assume
 Node.js globals exist. All ambient types shared across `window.nemi`
 methods (`ExplorerEntry`, `LogEntry`, `BackendHealth`, `ProjectRecord`,
 `SearchMatch`, `SearchOptions`, `AiProviderInfo`, `AiConversation`,
-`AiMessage`, `AiContextRef`, `AiStreamEventPayload`, etc.) live inside
+`AiMessage`, `AiContextRef`, `AiStreamEventPayload`, `AgentInfo`,
+`AgentRoleKey`, `AgentTask`, `ProposedFile`, etc.) live inside
 the `declare global` block of `electron-api.d.ts` so they're usable
 anywhere in the renderer without imports.
 
@@ -749,6 +753,135 @@ does not survive an app relaunch (in-memory stack only, capped at 20).
 
 ---
 
+# AGENT ORCHESTRATION FRAMEWORK (locked decision — Sprint 11)
+
+Implements MASTER_SPECIFICATION's AI AGENTS section on top of the
+provider/context foundation Sprint 10 built, explicitly deferred at
+the end of that sprint. Only four of the eight `agents/*.md` roles are
+wired into the automated pipeline — `ORCHESTRATED_ROLES = (planner,
+developer, reviewer, tester)` in `backend/app/ai/agent_roles.py` — the
+remaining roles (architect, debugger, etc.) stay reference documents
+for now, not scheduled tasks.
+
+**Stateless, externally-triggered orchestration — no backend-internal
+loop, no server-side API keys.** Sprint 10 locked "API keys are never
+stored server-side" (see AI CHAT & AGENT FRAMEWORK above); an
+orchestrator that ran its own internal scheduling loop inside
+`backend/app` would need to hold keys to make calls between ticks,
+breaking that decision. Instead `backend/app/ai/orchestration/
+manager.py`'s `run_cycle(settings, api_keys)` is a single async
+function with no loop of its own — it runs exactly one scheduling pass
+(pick runnable tasks, execute up to `MAX_CONCURRENT_TASKS` in
+parallel, persist results) and returns. Electron main
+(`frontend/electron/main.ts`) owns the actual cadence: a 4-second
+`setInterval` (`AGENT_RUN_CYCLE_INTERVAL_MS`, mirroring the precedent
+StatusBar's own 5-second health poll already established) decrypts
+whatever provider keys `safeStorage` currently holds and calls
+`POST /agents/run-cycle` fresh each tick. The backend never persists a
+key between calls — the same "credential only becomes live inside
+`backend/app`'s process boundary for the one call that needs it"
+property Sprint 10 established for chat now also holds for agents.
+
+**Agent roles are derived from `agents/*.md`, not hand-duplicated as
+Python strings.** `agent_roles.py`'s `load_agent_roles()` parses each
+role file's `# Heading` sections into a system prompt
+(`_compose_system_prompt()`), rewriting NEMI-self-referential text
+("NEMI AI STUDIO", "this project's own codebase") to refer to *the
+user's* project instead — an orchestrated agent is working on the
+user's code, not NEMI's own — and replacing any "BEFORE you start,
+read NEMI's internal docs" instructions (meaningless outside this
+repo) with a generic equivalent. `AgentsRepository.seed_from_role_files()`
+runs once at backend startup (`server.py`'s `_lifespan()`, after
+`init_db()`) so the `agents` table always reflects whatever's on disk
+— no separate migration step when a role file changes. Packaged
+builds bundle `agents/*.md` via PyInstaller's `datas` entry
+(`nemi-backend.spec`) and resolve the directory at runtime through the
+same `sys.frozen` self-detection `config.py` already used for the
+database/log paths (Sprint 8) — a packaging gap that predates this
+sprint (the role files were never bundled for a packaged build) fixed
+as part of making agents work end to end.
+
+**Agent Task Queue — `agent_tasks` table, dependency-gated
+scheduling.** A pipeline is a chain of rows sharing a `title`, each
+with a distinct `agent_role` and an optional `depends_on_task_id`
+pointing at the previous stage. `AgentTasksRepository.list_runnable()`
+returns queued tasks with no dependency, or whose dependency's
+`status = 'completed'` — the entire scheduling rule. `POST
+/agents/tasks` (`AgentPipelineCreate`) creates the whole chain
+up front in `queued` status, `stages` defaulting to all four
+orchestrated roles in order, so a caller sees the full plan
+immediately rather than discovering later stages as earlier ones
+finish.
+
+**Parallel execution — bounded, not unlimited.** `run_cycle()` gathers
+up to `MAX_CONCURRENT_TASKS = 3` runnable tasks per pass via
+`asyncio.gather`, independent pipelines (or independent root-stage
+tasks) genuinely executing concurrently rather than one-at-a-time —
+confirmed live (two independent single-stage tasks both observed in
+`running` status simultaneously), not just structurally plausible.
+
+**Automatic retries and failure recovery.**
+`AgentTasksRepository.mark_failed_or_retry()` increments `retry_count`
+and re-queues automatically while `retry_count <= max_retries`
+(default 2, so a task gets up to three total attempts before landing
+permanently on `failed`) — no manual intervention needed for a
+transient failure. Once a task is permanently `failed`,
+`cascade_cancel_dependents()` recursively cancels every downstream
+queued task in that pipeline rather than leaving them stuck in
+`queued` forever with a dependency that will never complete — a real
+failure state, not silent hanging. Confirmed live: a deliberately
+unresolvable model name failed the planner stage after exactly three
+attempts (`retry_count = max_retries + 1`), and the dependent
+developer stage was cascade-cancelled within the same scheduling pass.
+A user can also explicitly `retryTask()`/`cancelTask()` a task through
+the Agents Dashboard, using the same repository methods.
+
+**Agent-to-agent communication — the `memory` table's first real
+implementation.** `memory` has existed schema-ready since Sprint 4
+(`type IN ('project','conversation','long_term','task','knowledge')`)
+without a repository. `MemoryRepository.remember()`/`recall()` gives
+it one, using `type='task'` and `key=<completed task id>` to hand a
+completed stage's output to the next stage as durable state — durable
+specifically because it survives a backend restart mid-pipeline
+(unlike an in-memory handoff, which wouldn't), matching "conversation
+and execution history" being a real persistence requirement, not just
+a UI nicety.
+
+**Developer Agent file changes are proposed, never auto-applied.**
+The Developer role's system prompt instructs it to emit file changes
+as fenced ` ```file:relative/path\n<content>\n``` ` blocks;
+`manager.py`'s `_extract_proposed_files()` parses them via regex into
+`AgentTaskOut.proposed_files` and stores them on the task row —
+parsing only, no filesystem write happens server-side. Applying a
+proposed file is a distinct, explicit user action
+(`AgentsContextValue.applyProposedFile()`, wired to a per-file "Apply"
+button in the Agents Dashboard) that calls the existing
+`window.nemi.fs.writeFile()` IPC (Sprint 5), the same human-gated
+write path every other file mutation in the app already goes through.
+This is a direct reading of `agents/developer.md`'s own "never delete
+files without approval" rule, extended to creation/modification as
+well — an agent proposes, a human applies.
+
+**Provider-independent by construction, not by a second abstraction.**
+The orchestrator calls `get_provider(task["provider"]).stream_chat(...)`
+— Sprint 10's existing `AIProvider` abstraction, used directly, not
+wrapped in a new agent-specific provider layer. Any provider Sprint 10
+supports (OpenAI, Anthropic, Gemini, Ollama), an agent task can use,
+selected per-task at creation time.
+
+**Explicitly out of scope**, stated up front: the four
+non-orchestrated `agents/*.md` roles (architect, debugger, and
+others) are not scheduled — only planner/developer/reviewer/tester
+participate in the automated queue; a true dependency graph beyond a
+single linear chain (e.g. fan-out/fan-in, one task depending on
+multiple predecessors) — `depends_on_task_id` is a single foreign key,
+not a list; and streaming agent output token-by-token to the Agents
+Dashboard in real time — a task's progress is visible via its
+`status`/`conversation_id` (open the full conversation to see the
+exchange), not a live-streaming view of the task card itself.
+
+---
+
 # PLUGIN / EXTENSION ARCHITECTURE (future — not started)
 
 MASTER_SPECIFICATION.md lists "Plugin Marketplace" under FUTURE
@@ -878,6 +1011,37 @@ must never run with Node.js integration in the renderer.
     actions therefore also get explicit keybindings
     (`Ctrl+Shift+Alt+<letter>`), which are both genuine keyboard-
     accessible UX and the actual path live verification exercises.
+28. **(Sprint 11)** The agent orchestrator (`run_cycle()`) is
+    stateless and holds no API keys of its own — Electron main
+    triggers one scheduling pass every 4 seconds, decrypting keys via
+    `safeStorage` fresh each call, preserving Sprint 10's "keys never
+    persisted server-side" decision rather than creating a second,
+    inconsistent credential path for agents.
+29. **(Sprint 11)** Only `planner`/`developer`/`reviewer`/`tester`
+    from `agents/*.md` participate in the automated task queue
+    (`ORCHESTRATED_ROLES`); the other role files remain reference
+    documents, not scheduled tasks.
+30. **(Sprint 11)** Agent-to-agent handoff uses the `memory` table
+    (`type='task'`), the table's first real implementation since it
+    was made schema-ready in Sprint 4 — durable across a backend
+    restart mid-pipeline, not an in-memory handoff.
+31. **(Sprint 11)** Developer Agent file changes are parsed into
+    `proposed_files` but never written to disk automatically — a
+    human must explicitly Apply each one, going through the same
+    `window.nemi.fs.writeFile()` path (Sprint 5) every other file
+    mutation in the app uses. A direct extension of
+    `agents/developer.md`'s own "never delete files without approval"
+    rule to creation/modification.
+32. **(Sprint 11)** A task's dependency is a single
+    `depends_on_task_id`, not a graph — pipelines are linear chains,
+    not fan-out/fan-in DAGs; parallelism comes from running
+    *independent* chains concurrently (bounded by
+    `MAX_CONCURRENT_TASKS = 3`), not from branching within one chain.
+33. **(Sprint 11)** A task gets up to `max_retries + 1` total attempts
+    (default 3) before landing permanently on `failed`; permanent
+    failure cascade-cancels every downstream queued task in that
+    pipeline rather than leaving them stuck waiting on a dependency
+    that will never complete.
 
 ---
 

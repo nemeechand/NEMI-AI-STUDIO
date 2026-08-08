@@ -68,6 +68,8 @@ class AiConversationOut(BaseModel):
     title: str
     provider: str
     model: str
+    agent_id: str | None = None
+    task_id: str | None = None
     created_at: str
     updated_at: str
 
@@ -106,3 +108,64 @@ class AiSendMessageRequest(BaseModel):
     model: str = Field(min_length=1)
     api_key: str | None = None
     context_refs: list[AiContextRefIn] | None = None
+
+
+# --- Agent Orchestration (Sprint 11) ---
+
+AgentRoleKey = Literal["planner", "developer", "reviewer", "tester"]
+AgentTaskStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
+
+DEFAULT_PIPELINE: tuple[AgentRoleKey, ...] = ("planner", "developer", "reviewer", "tester")
+
+
+class AgentOut(BaseModel):
+    id: str
+    name: str
+    role_file: str
+    enabled: bool
+
+
+class ProposedFileOut(BaseModel):
+    path: str
+    content: str
+
+
+class AgentTaskOut(BaseModel):
+    id: str
+    project_id: str | None
+    title: str
+    description: str
+    agent_role: AgentRoleKey
+    status: AgentTaskStatus
+    priority: int
+    depends_on_task_id: str | None
+    provider: str
+    model: str
+    conversation_id: str | None
+    retry_count: int
+    max_retries: int
+    result_summary: str | None
+    proposed_files: list[ProposedFileOut] | None
+    error_message: str | None
+    created_at: str
+    updated_at: str
+    started_at: str | None
+    completed_at: str | None
+
+
+class AgentPipelineCreate(BaseModel):
+    project_id: str | None = None
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=20_000)
+    provider: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    priority: int = Field(default=2, ge=1, le=4)
+    stages: list[AgentRoleKey] = Field(default_factory=lambda: list(DEFAULT_PIPELINE), min_length=1)
+
+
+class AgentRunCycleRequest(BaseModel):
+    api_keys: dict[str, str] = Field(default_factory=dict)
+
+
+class AgentRunCycleResult(BaseModel):
+    started: int

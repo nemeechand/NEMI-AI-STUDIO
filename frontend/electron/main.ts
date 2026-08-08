@@ -37,6 +37,16 @@ import {
   streamMessage,
   type AiContextRefInput,
 } from './ai-client';
+import {
+  cancelAgentTask,
+  createAgentPipeline,
+  getAgentTask,
+  listAgentTasks,
+  listAgents,
+  retryAgentTask,
+  runAgentCycle,
+  type AgentRoleKey,
+} from './agent-client';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -199,12 +209,65 @@ ipcMain.handle(
 );
 ipcMain.handle('ai:cancel-message', (_event, requestId: string) => cancelMessageStream(requestId));
 
+ipcMain.handle('agents:list', () => listAgents());
+ipcMain.handle('agents:list-tasks', (_event, projectId: string | null) =>
+  listAgentTasks(projectId),
+);
+ipcMain.handle('agents:get-task', (_event, taskId: string) => getAgentTask(taskId));
+ipcMain.handle(
+  'agents:create-pipeline',
+  (
+    _event,
+    input: {
+      projectId: string | null;
+      title: string;
+      description: string;
+      provider: string;
+      model: string;
+      priority?: number;
+      stages?: AgentRoleKey[];
+    },
+  ) => createAgentPipeline(input),
+);
+ipcMain.handle('agents:cancel-task', (_event, taskId: string) => cancelAgentTask(taskId));
+ipcMain.handle('agents:retry-task', (_event, taskId: string) => retryAgentTask(taskId));
+
+const AGENT_RUN_CYCLE_INTERVAL_MS = 4_000;
+const AGENT_CYCLE_PROVIDERS: ProviderId[] = ['openai', 'anthropic', 'gemini'];
+let agentCycleTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Drives the agent task queue forward. Deliberately a steady interval
+ * poll from Electron main, not a loop the backend runs on its own: API
+ * keys are only ever decrypted here (safeStorage) and attached per
+ * request, the same way ai:send-message already works — the backend
+ * itself never persists or caches a key (Sprint 10's locked decision).
+ * Ollama needs no key and is unaffected by whether any are configured.
+ */
+async function runAgentCycleOnce(): Promise<void> {
+  try {
+    const apiKeys: Record<string, string> = {};
+    for (const provider of AGENT_CYCLE_PROVIDERS) {
+      const key = await getApiKey(provider);
+      if (key) apiKeys[provider] = key;
+    }
+    const result = await runAgentCycle(apiKeys);
+    if (result.started > 0) {
+      mainWindow?.webContents.send('agents:tasks-changed', {});
+    }
+  } catch {
+    // Backend not reachable yet (e.g. still starting) — harmless, the
+    // next tick tries again. No state is lost: tasks just stay 'queued'.
+  }
+}
+
 app.whenReady().then(() => {
   createMainWindow();
   startBackend(__dirname);
   setChangeListener((event) => {
     mainWindow?.webContents.send('fs:changed', event);
   });
+  agentCycleTimer = setInterval(() => void runAgentCycleOnce(), AGENT_RUN_CYCLE_INTERVAL_MS);
 });
 
 app.on('window-all-closed', () => {
@@ -222,4 +285,5 @@ app.on('activate', () => {
 app.on('before-quit', () => {
   stopBackend();
   closeProject();
+  if (agentCycleTimer) clearInterval(agentCycleTimer);
 });

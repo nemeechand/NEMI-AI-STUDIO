@@ -10,6 +10,7 @@ import type {
   AiProviderInfo,
   StreamEventPayload,
 } from './ai-client';
+import type { AgentInfo, AgentRoleKey, AgentTask } from './agent-client';
 
 const backend = {
   health: (): Promise<BackendHealth> => ipcRenderer.invoke('backend:health'),
@@ -103,6 +104,30 @@ const aiApi = {
   },
 };
 
+const agentsApi = {
+  list: (): Promise<AgentInfo[]> => ipcRenderer.invoke('agents:list'),
+  listTasks: (projectId: string | null): Promise<AgentTask[]> =>
+    ipcRenderer.invoke('agents:list-tasks', projectId),
+  getTask: (taskId: string): Promise<AgentTask> => ipcRenderer.invoke('agents:get-task', taskId),
+  createPipeline: (input: {
+    projectId: string | null;
+    title: string;
+    description: string;
+    provider: string;
+    model: string;
+    priority?: number;
+    stages?: AgentRoleKey[];
+  }): Promise<AgentTask[]> => ipcRenderer.invoke('agents:create-pipeline', input),
+  cancelTask: (taskId: string): Promise<void> => ipcRenderer.invoke('agents:cancel-task', taskId),
+  retryTask: (taskId: string): Promise<AgentTask> =>
+    ipcRenderer.invoke('agents:retry-task', taskId),
+  onTasksChanged: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('agents:tasks-changed', listener);
+    return () => ipcRenderer.removeListener('agents:tasks-changed', listener);
+  },
+};
+
 const windowControls = {
   minimize: () => ipcRenderer.invoke('window:minimize'),
   maximizeToggle: () => ipcRenderer.invoke('window:maximize-toggle'),
@@ -122,4 +147,5 @@ contextBridge.exposeInMainWorld('nemi', {
   fs: fsApi,
   projects,
   ai: aiApi,
+  agents: agentsApi,
 });

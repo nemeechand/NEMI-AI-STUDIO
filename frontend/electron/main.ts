@@ -75,6 +75,19 @@ import {
 } from './build-runner';
 import { getSystemMetrics } from './system-metrics';
 import { getHistory, getPerformanceStats, getTokenStats } from './stats-client';
+import {
+  generateEmbeddings,
+  getDiagram,
+  getFileContext,
+  getFileHistorySummary,
+  getGraph,
+  getImpact,
+  getStats as getKnowledgeStats,
+  indexProject,
+  listEmbeddingProviders,
+  listMemory,
+  searchKnowledge,
+} from './knowledge-client';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -315,6 +328,54 @@ ipcMain.handle('stats:performance', (_event, projectId: string | null) =>
 ipcMain.handle('stats:tokens', () => getTokenStats());
 ipcMain.handle('stats:history', (_event, projectId: string | null, limit?: number) =>
   getHistory(projectId, limit),
+);
+
+ipcMain.handle('knowledge:index', (_event, projectId: string, projectPath: string) =>
+  indexProject(projectId, projectPath),
+);
+ipcMain.handle('knowledge:get-graph', (_event, projectId: string) => getGraph(projectId));
+ipcMain.handle('knowledge:get-stats', (_event, projectId: string) => getKnowledgeStats(projectId));
+ipcMain.handle('knowledge:list-embedding-providers', () => listEmbeddingProviders());
+ipcMain.handle(
+  'knowledge:generate-embeddings',
+  async (
+    _event,
+    input: { projectId: string; projectPath: string; provider: string; model: string },
+  ) => {
+    const apiKey = await getApiKey(input.provider as ProviderId);
+    return generateEmbeddings({ ...input, apiKey });
+  },
+);
+ipcMain.handle(
+  'knowledge:search',
+  async (
+    _event,
+    input: { projectId: string; query: string; provider?: string | null; model?: string | null },
+  ) => {
+    const apiKey = input.provider ? await getApiKey(input.provider as ProviderId) : null;
+    return searchKnowledge({ ...input, apiKey });
+  },
+);
+ipcMain.handle('knowledge:get-impact', (_event, projectId: string, file: string) =>
+  getImpact(projectId, file),
+);
+ipcMain.handle('knowledge:get-file-context', (_event, projectId: string, file: string) =>
+  getFileContext(projectId, file),
+);
+ipcMain.handle('knowledge:get-file-history', (_event, projectPath: string, file: string) =>
+  getFileHistorySummary(projectPath, file),
+);
+ipcMain.handle(
+  'knowledge:get-diagram',
+  (_event, projectId: string, type: 'dependency' | 'architecture') => getDiagram(projectId, type),
+);
+ipcMain.handle(
+  'knowledge:list-memory',
+  (
+    _event,
+    projectId: string | null,
+    type: 'project' | 'conversation' | 'long_term' | 'task' | 'knowledge',
+  ) => listMemory(projectId, type),
 );
 
 const AGENT_RUN_CYCLE_INTERVAL_MS = 4_000;

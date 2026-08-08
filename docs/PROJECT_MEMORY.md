@@ -458,6 +458,28 @@ Verified: tsc build, eslint (0 warnings), prettier (clean), vite build; pytest (
 
 Known limitation: "AI logs" (requested as a distinct Live Terminal category) is folded into "Backend" logs since Sprint 4 already locked AI/orchestration logging into that same stream, not a separate one — stated honestly rather than fabricating a fifth log source. "Network" reports backend connectivity, not bandwidth (no cross-platform throughput API). Documentation/Commit/Push pipeline stages have no automation behind them yet (git integration is read-only this sprint) and render as explicitly not-yet-automated. Resource/disk metrics are Windows-only. Code-signing certificate for the installer remains the top Beta blocker, unaffected by this sprint.
 
+Sprint 14 — Completed (Knowledge Graph & AI Memory Engine)
+
+Goal:
+
+Enable NEMI AI Studio to remember, connect, search, and reason over every project artifact across time: Persistent AI Memory, a Knowledge Graph linking Projects/Files/Functions/Classes/Agents/Workflows/Commits/Users/Requirements, Semantic Search, Architecture Intelligence (why was this written / where used / what breaks / who changed it), Code Impact Analysis, Long-term Memory, AI Learning from previous sprints, and Automatic Documentation (diagrams/dependency maps) — preserving Sprints 1–13.
+
+Delivered:
+
+Backend: three new tables — `graph_nodes`/`graph_edges` (a relational knowledge graph, not a dedicated graph database, matching this app's SQLite-only architecture) and `embeddings` (real vectors, JSON-encoded, brute-force cosine similarity at query time). `KnowledgeRepository` provides idempotent find-or-create node/edge writes. `backend/app/knowledge/indexer.py::index_project()` walks the open project's files directly from disk in the backend — a deliberate, scoped exception to Sprint 5's Filesystem Ownership rule, justified as bulk read-only analysis feeding straight into SQLite rather than interactive CRUD — and builds `file`/`function`/`class` nodes plus resolved same-project `imports` edges via a new heuristic (regex-based, explicitly not AST) code parser (`backend/app/knowledge/code_parser.py`) covering Python/JS/TS. `files` (schema-ready since Sprint 3) got its first real repository. Commit/author/`modifies` nodes come from git history Electron already gathers (`git-status.ts::getCommitLog()`, one `git log --name-only` call) — git access itself stayed Electron's, per Sprint 13's ownership rule. `memory`'s four remaining unused `type` values (`long_term`/`knowledge`/`project`/`conversation`) gained real writers: a sprint-summary entry on workflow completion, `bug:`/`fix:` entries on permanent task failure / retry-then-succeed, and a `change:` entry when a Developer task's files are applied. `manager.py::_related_past_experience()` — real, cross-project, token-overlap retrieval over recorded memory (no embedding call, so it works without any provider configured) — injects relevant past-sprint context into the Planner's prompt before goal decomposition (AI Learning). New `app/ai/embeddings.py`: an `EmbeddingProvider` abstraction for OpenAI/Gemini/Ollama (Anthropic excluded — no embeddings API exists) parallel to the existing chat-provider abstraction. New `app/knowledge/semantic.py`: `gather_candidates()` (capped at 150 files, uncapped memory/workflow candidates), `run_embedding_pass()`, `semantic_search()` (real cosine similarity) with an honest `keyword_search()` fallback — `POST /knowledge/search` reports which mode it actually used. New `app/knowledge/analysis.py`: real reverse-graph-traversal impact analysis with a stated, simple risk heuristic (never presented as ML), and real Mermaid dependency/architecture diagram generation. New `/knowledge/*` API router (index, graph, stats, embedding-providers, embed, search, impact, context, diagram, memory).
+
+Electron: new `knowledge-client.ts` (the `window.nemi.knowledge` IPC surface, the twelfth namespace) and `git-status.ts::getCommitLog()`/a file-history helper for Architecture Intelligence's real git-log retrieval. `main.ts` resolves API keys server-side (Electron main via `safeStorage`) for embed/search calls, the same pattern `ai:send-message` already established — never the renderer holding a key.
+
+Frontend: new `knowledge/` Context+Provider+Hook module (`KnowledgeProvider.tsx`) and a new Sidebar panel, `KnowledgePanel.tsx` (Index Project, real graph stats, Semantic Search with honest mode labeling, Generate Embeddings, dependency/architecture diagram export as downloadable `.mmd` files — no in-app Mermaid renderer is bundled). A new Monaco editor action, "AI: Explain File History & Impact" (`Ctrl+Shift+Alt+H`), gathers real graph relationships + recorded memory + real git history and feeds it into the existing `askAboutSelection()` plumbing — Architecture Intelligence answers via retrieval fed to the AI Chat Panel, not the model reasoning unaided.
+
+Found and fixed two real issues during implementation/live verification: (1) the Python heuristic parser's function/class regexes were originally capped to 0–3 leading spaces, intended to mean "top-level," but that silently excluded every method inside a class (4-space indent) — caught by a unit test expecting a class method to be found; fixed by matching any leading whitespace, consistent with the parser's own documented "doesn't understand scope" limitation. (2) Bulk-embedding a real, large project (this repo's own ~684 indexed files) through a local CPU-bound Ollama model was found live to take far longer than a single blocking request should reasonably wait for — not a defect in the embedding call itself (a single-text round trip was already fast and unit-tested), but an honest scale problem with no bound in place; fixed by capping file-embedding candidates at 150 (memory/workflow candidates stay uncapped), reducing the provider batch size to 16 texts, raising both the Electron-side and Ollama-provider timeouts to match a genuine bulk operation (same tier as Sprint 13's build/test runners), and re-verifying live against both the full real repo (structural indexing: graph/impact/diagrams, all fast) and a small real five-file subset (embeddings/semantic search, which returned genuinely differentiated cosine-similarity relevance for an on-topic query versus an intentionally unrelated sanity-check query).
+
+docs/ARCHITECTURE.md gained a new "KNOWLEDGE GRAPH & AI MEMORY ENGINE (locked — Sprint 14)" section, the IPC namespace list updated to twelve namespaces, ten new locked-decision entries, version bumped to 2.1; docs/DATABASE_SCHEMA.md updated with the three new tables, `files`'s first implementation, and `memory`'s remaining types, version bumped to 1.7; docs/SPRINT_14_REPORT.md created.
+
+Verified: tsc build, eslint (0 warnings), prettier (clean, except one pre-existing unrelated `tsconfig.json` formatting warning not touched this sprint), vite build; pytest (122 passed including a genuine, non-mocked live Ollama embedding round trip — no skips), ruff check (all checks passed), mypy strict (0 issues, 56 source files). Live Playwright verification (real Ollama, real git history, no mocks) against this repo itself: indexed 684 real files in ~1.7s producing 1,477 real graph nodes and 2,334 real edges; impact analysis on a real file correctly found its real dependents; dependency and architecture Mermaid diagrams generated from real data; keyword-fallback search correctly triggered and labeled itself when no embedding provider was selected; a small real 5-file subset was fully embedded via local Ollama and semantically searched, returning sensible, differentiated relevance; real git history retrieved for a real file showed its three actual recent commits; the Knowledge sidebar panel rendered correctly with live stats. Full Sprint 1–13 regression pass (fresh isolated profile): all twelve `window.nemi` IPC namespaces present, Explorer/Monaco/Agents/Knowledge panels all render and function, all backend endpoints reachable through the real IPC boundary (never a direct renderer fetch, confirming Sprint 2's CSP is still enforced), and the Sprint 13 Intelligence Center still opens cleanly.
+
+Known limitation: code parsing is heuristic/regex-based, not a full AST parser, for Python/JS/TS only. Unresolved (external package) imports are not modeled as graph nodes. Embedding generation is a single synchronous request with a generous timeout, not yet a cancellable background job — a very large project's full embedding pass can still take several minutes even with the 150-file cap. "Requirement" graph nodes are derived 1:1 from a workflow's goal text, since no separate requirements-intake feature exists. No in-app Mermaid rendering (diagrams export as `.mmd` files). Code-signing certificate for the installer remains the top Beta blocker, unaffected by this sprint.
+
 ---
 
 # CURRENT STATUS
@@ -670,15 +692,25 @@ Sprint 1 Completed
 
 ✔ Sprint 13 Verified (tsc, eslint, prettier, vite build; pytest ×86 [14 new], ruff, mypy strict; live Playwright verification — all 12 sections navigated without error, real git status for this repo, Resource Monitor accurately reflecting genuine 100% CPU/96% RAM load during a real Run Verification execution, Build Center correctly gating on real npm-script detection, a correctly-scoped workflow populating Sprint Center with live data, notification-staleness bug found/fixed/reconfirmed — reproduced clean)
 
+✔ Sprint 14 Completed — Knowledge Graph & AI Memory Engine
+
+✔ Knowledge Graph Implemented — relational `graph_nodes`/`graph_edges` tables (not a dedicated graph database), populated by a new backend indexer that walks the open project's files, extracts functions/classes/imports via a heuristic regex parser (Python/JS/TS), and links real git commits/authors — Project/File/Function/Class/Agent/Workflow/Commit/User/Requirement nodes with Contains/Defines/Imports/Modifies/Executed_by/Authored_by/Implements relationships
+
+✔ Persistent AI Memory & AI Learning Implemented — `memory`'s four previously-unused types now have real writers (sprint summaries, bugs, fixes, architecture changes), retrieved via real cross-project keyword-overlap ranking and injected into the Planner's prompt before goal decomposition — genuine retrieval-augmented planning, not claimed self-improvement
+
+✔ Semantic Search, Architecture Intelligence, and Code Impact Analysis Implemented — real embeddings (OpenAI/Gemini/Ollama; Anthropic has no embeddings API) with honest keyword-fallback labeling when no provider/embeddings exist; real graph+memory+git-history retrieval fed to the AI Chat Panel for "why/where/what breaks/who changed it"; a transparent, stated risk heuristic (never presented as ML) for impact analysis; real Mermaid dependency/architecture diagrams exportable as `.mmd` files
+
+✔ Found and Fixed Two Real Issues — a parser regex accidentally excluded class methods from function extraction (caught by a unit test, fixed to match the parser's own documented scope limitation); bulk-embedding a real large project through a local model was found live to need a bounded candidate cap, smaller batches, and longer timeouts rather than an unbounded single request — fixed and re-verified live against both a full real 684-file repo (structural features) and a small real file subset (embeddings/semantic search)
+
+✔ Sprint 14 Verified (tsc, eslint, prettier, vite build; pytest ×122 [36 new, incl. a live non-mocked Ollama embedding round trip], ruff, mypy strict [56 source files]; live Playwright verification against this repo itself — real indexing/graph/impact/diagrams/keyword-fallback search at full scale, real embeddings + differentiated semantic search on a real file subset, real git history retrieval; full Sprint 1–13 regression pass with all 12 IPC namespaces and panels confirmed intact — reproduced clean)
+
 ---
 
 # PENDING TASKS
 
-Code-signing certificate for the installer (currently unsigned) — top remaining Beta blocker, unaffected by Sprint 13
+Code-signing certificate for the installer (currently unsigned) — top remaining Beta blocker, unaffected by Sprint 14
 
 Workflow Design
-
-Memory Engine (the schema-generic `long_term`/`knowledge`/`project`/`conversation` memory types remain unused — only `type='task'` has a real consumer, added in Sprint 11)
 
 Plugin System
 
@@ -688,7 +720,11 @@ Testing Engine
 
 Build System
 
-Repositories/business logic for the remaining 2 tables (`tasks`, `settings`) — schema exists, repositories deferred to the sprints that need them; `projects` (Sprint 7), `ai_conversations`/`ai_messages` (Sprint 10), `agents`/`agent_tasks`/`memory` (Sprint 11), `workflows`/`milestones` (Sprint 12), and `history` (Sprint 13) now have repositories; `files` table remains intentionally unused (file content always comes from disk)
+Repositories/business logic for the remaining table (`tasks`; `settings` still has no repository either) — schema exists, repositories deferred to the sprints that need them; `projects` (Sprint 7), `ai_conversations`/`ai_messages` (Sprint 10), `agents`/`agent_tasks`/`memory` (Sprint 11), `workflows`/`milestones` (Sprint 12), `history` (Sprint 13), and `files`/`graph_nodes`/`graph_edges`/`embeddings` (Sprint 14) now have repositories
+
+Embedding generation is a single synchronous request, not yet a cancellable background job (Sprint 14) — a very large project's full pass can take several minutes even with the 150-file candidate cap
+
+A true multi-language AST parser for the knowledge graph's code indexing (Sprint 14's parser is heuristic/regex-based, Python/JS/TS only) — a dedicated future sprint's scope, not attempted here
 
 Resizable/drag panel splitters (sidebar and logger panel are currently show/hide toggles only)
 
@@ -872,19 +908,25 @@ Sprint 12 Completed — Workflow Engine & AI Project Manager: builds an autonomo
 
 Sprint 13 Completed — Live Development Dashboard & Intelligence Center: a real-time operational dashboard (12 sections: Sprint Center, Agent Monitor, Workflow View, Terminal, AI Thinking, Resources, Tokens & Cost, Build Center, Pause/Resume, History, Notifications, Performance) opened via a new HeaderToolbar button or `Ctrl+Shift+I`, every widget backed by real data with honest labeled substitutes wherever genuine telemetry doesn't exist (AI logs folded into Backend logs, Network shows connectivity not bandwidth, unautomated pipeline stages marked as such rather than faked); new real git integration (branch/ahead-behind/commits, scoped to the open user project, never NEMI's own source) and build/test runner (detected from the project's actual npm/Python scripts, streamed output, cancellable); `agent_tasks` gained a `live_output` column (genuine partial streamed model output, not fabricated reasoning) and `history` got its first real implementation since being schema-ready since Sprint 3; found and fixed two real bugs during live verification (the new Sprint Center's Pause button missing the same `'planning'`-state case Sprint 12 fixed once already, and notifications re-firing for already-terminal tasks/workflows left over from a previous session on a fresh mount — fixed by keying "already seen" tracking per entity id) — verified via live Playwright testing against this repo's own real git state and a real `npx tsc --noEmit` run, plus the full offline suite; resolves the operational-visibility work implied by Sprints 11/12's growing agent/workflow surface
 
+Sprint 14 Completed — Knowledge Graph & AI Memory Engine: a relational knowledge graph (`graph_nodes`/`graph_edges`, not a dedicated graph database) built by a new indexer that walks the open project's files (a deliberate, scoped exception to Sprint 5's Filesystem Ownership rule, justified as bulk read-only analysis rather than interactive CRUD), extracts functions/classes/imports via a heuristic Python/JS/TS parser (explicitly not a full AST parser), and links real git commit/author history gathered by Electron; `memory`'s four previously-unused types (`long_term`/`knowledge`/`project`/`conversation`) gained real writers (sprint summaries, bugs, fixes, architecture changes), retrieved via real cross-project keyword-overlap ranking and fed into the Planner's prompt before goal decomposition (AI Learning, genuine retrieval not claimed self-improvement); real Semantic Search (OpenAI/Gemini/Ollama embeddings, Anthropic excluded since it has no embeddings API) with an honest keyword-fallback mode whenever no provider/embeddings exist; Architecture Intelligence answers "why/where/what breaks/who changed it" via real graph+memory+git-history retrieval fed to the AI Chat Panel, not unaided model reasoning; Code Impact Analysis uses a transparent, stated risk heuristic, never presented as ML; Automatic Documentation generates real Mermaid dependency/architecture diagrams, exported as `.mmd` files; found and fixed two real issues during implementation/live verification (a parser regex accidentally excluding class methods from extraction; bulk-embedding a real large project needing a bounded candidate cap, smaller batches, and longer timeouts rather than an unbounded single request) — verified via live Playwright testing against this repo itself at full scale (684 real files, 1,477 real graph nodes) plus a real embeddings/semantic-search round trip on a small real file subset, a full Sprint 1–13 regression pass, and the full offline suite; resolves the persistent-memory/knowledge-graph work flagged as pending in every PROJECT_MEMORY.md entry since Sprint 11
+
 ---
 
 # NEXT MILESTONE
 
-Sprint 14
+Sprint 15
 
-Code-signing certificate for the installer — still the top remaining Beta blocker, unaffected by Sprint 13
+Code-signing certificate for the installer — still the top remaining Beta blocker, unaffected by Sprint 14
 
 True concurrent multi-project support (simultaneous open projects, not just switching) — deliberately deferred in Sprint 7; would require a per-project filesystem watcher map and a multi-root Explorer UI
 
 Wiring the remaining four `agents/*.md` roles (architect, debugger, etc.) into the orchestration queue, and/or a richer dependency model beyond a single linear chain per pipeline — Sprint 11/12 deliberately scoped to the four core roles and linear chains only
 
 An in-app git commit/push action (Sprint 13 added read-only git status only) — would let the Live Workflow View's Documentation/Commit/Push nodes become genuinely automated instead of marked not-yet-automated
+
+Turning embedding generation into a cancellable background job with progress reporting (Sprint 14 shipped it as a single bounded synchronous request) — would remove the remaining wall-clock cap on how much of a very large project can be embedded in one pass
+
+A true multi-language AST parser for code indexing (Sprint 14's parser is heuristic/regex-based, Python/JS/TS only) — would improve Knowledge Graph/Code Impact Analysis accuracy on other languages and on scope-sensitive constructs
 
 ---
 

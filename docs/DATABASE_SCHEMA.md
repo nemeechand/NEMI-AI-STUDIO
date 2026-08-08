@@ -1,7 +1,7 @@
 # DATABASE_SCHEMA.md
 
-Version: 1.6
-Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4); `projects` Repository Implemented (Sprint 7); `ai_conversations`/`ai_messages` Added and Implemented (Sprint 10); `agent_tasks` Added and `memory` Repository Implemented (Sprint 11); `workflows`/`milestones` Added and `agent_tasks` Extended (Sprint 12); `history` Repository Implemented and `agent_tasks.live_output` Added (Sprint 13)
+Version: 1.7
+Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4); `projects` Repository Implemented (Sprint 7); `ai_conversations`/`ai_messages` Added and Implemented (Sprint 10); `agent_tasks` Added and `memory` Repository Implemented (Sprint 11); `workflows`/`milestones` Added and `agent_tasks` Extended (Sprint 12); `history` Repository Implemented and `agent_tasks.live_output` Added (Sprint 13); `graph_nodes`/`graph_edges`/`embeddings` Added, `files` Repository Implemented, `memory`'s Remaining Types Implemented (Sprint 14)
 Engine: SQLite
 
 ---
@@ -82,6 +82,13 @@ Unique constraint: `(project_id, relative_path)`.
 Note: this table is a searchable index of project files, not file
 content storage. File content is always read from disk.
 
+**First real implementation: Sprint 14's knowledge indexer.**
+Schema-ready since Sprint 3; `FilesRepository`
+(`backend/app/db/repositories/files_repository.py`) upserts one row per
+file the indexer walks, and `delete_missing()` prunes rows for files no
+longer on disk after a re-index — see KNOWLEDGE GRAPH & AI MEMORY
+ENGINE in `docs/ARCHITECTURE.md`.
+
 ## agents
 
 | Column       | Type | Constraints                | Notes                                     |
@@ -117,8 +124,25 @@ Index: `idx_memory_project_type` on `(project_id, type)`.
 (`backend/app/db/repositories/memory_repository.py`) use `type='task'`,
 `key=<completed task id>` to hand a pipeline stage's output to the
 next stage — durable across a backend restart mid-pipeline, unlike an
-in-memory handoff. The other four `type` values remain schema-ready
-for future use.
+in-memory handoff.
+
+**The remaining four `type` values gained real consumers in Sprint 14
+(Persistent AI Memory):** `type='long_term'`,
+`key='sprint:<workflow_id>'` records a real "what happened" summary
+(goal, milestones, task count) once a workflow reaches `completed`
+(`manager.py::_record_sprint_summary_memory`); `type='knowledge'` is
+used for three distinct real events — `key='bug:<task_id>'` when a
+task fails permanently, `key='fix:<task_id>'` when a task succeeds
+after one or more prior failures, and `key='change:<task_id>'` when a
+Developer task's proposed files are applied
+(`app/api/agents.py::_record_architecture_change`). `type='project'`
+and `type='conversation'` remain schema-ready, unused. All entries are
+browsable via `GET /knowledge/memory` and retrieved (cross-project,
+simple keyword-overlap ranking — not an embedding call, so it works
+even with no provider configured) by
+`manager.py::_related_past_experience` before a new goal is
+decomposed, feeding the Planner real prior-sprint context — Sprint
+14's "AI Learning".
 
 ## logs
 
@@ -297,6 +321,79 @@ Index: `idx_workflows_project_id` on `project_id`.
 
 Index: `idx_milestones_workflow_id` on `workflow_id`.
 
+## graph_nodes (Sprint 14)
+
+| Column      | Type | Constraints                                                                                                                    | Notes                                       |
+|-------------|------|-----------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------|
+| id          | TEXT | PRIMARY KEY                                                                                                                     |                                                  |
+| project_id  | TEXT | FK → projects.id                                                                                                                | nullable                                        |
+| node_type   | TEXT | NOT NULL, CHECK IN ('project','file','function','class','agent','workflow','commit','user','requirement')                     | the knowledge graph's node vocabulary           |
+| label       | TEXT | NOT NULL                                                                                                                        | human-readable identity, e.g. `path/to/file.py::function_name` |
+| ref_id      | TEXT |                                                                                                                                  | nullable — id of the real row this node represents (e.g. a `workflows.id`), when one exists |
+| metadata    | TEXT |                                                                                                                                  | nullable, JSON-encoded (e.g. `{"language": "python"}`) |
+| created_at  | TEXT | NOT NULL                                                                                                                        |                                                  |
+| updated_at  | TEXT | NOT NULL                                                                                                                        |                                                  |
+
+Index: `idx_graph_nodes_project_type` on `(project_id, node_type)`.
+Unique constraint: `(project_id, node_type, label)` — makes re-indexing
+idempotent (find-or-create) rather than duplicating.
+
+A relational graph, not a dedicated graph database — matches this
+project's SQLite-only architecture. `ref_id` lets a caller join back to
+full detail (e.g. a `file` node's `files` row) without duplicating that
+data into the graph; a derived node with no single backing row (a git
+author, a workflow's goal doubling as its `requirement` node) leaves it
+null. `agent_task` rows are deliberately NOT modeled as individual
+nodes — see ARCHITECTURE.md's KNOWLEDGE GRAPH & AI MEMORY ENGINE
+section for the full scoping rationale.
+
+## graph_edges (Sprint 14)
+
+| Column       | Type | Constraints                                                                                                          | Notes                                  |
+|--------------|------|---------------------------------------------------------------------------------------------------------------------------|---------------------------------------------|
+| id           | TEXT | PRIMARY KEY                                                                                                              |                                             |
+| project_id   | TEXT | FK → projects.id                                                                                                        | nullable                                    |
+| from_node_id | TEXT | NOT NULL, FK → graph_nodes.id                                                                                           |                                             |
+| to_node_id   | TEXT | NOT NULL, FK → graph_nodes.id                                                                                           |                                             |
+| relationship | TEXT | NOT NULL, CHECK IN ('contains','defines','imports','modifies','executed_by','authored_by','implements','related_to')  | the knowledge graph's edge vocabulary       |
+| metadata     | TEXT |                                                                                                                            | nullable, JSON-encoded                      |
+| created_at   | TEXT | NOT NULL                                                                                                                 |                                             |
+
+Indexes: `idx_graph_edges_from` on `from_node_id`,
+`idx_graph_edges_to` on `to_node_id`.
+Unique constraint: `(from_node_id, to_node_id, relationship)` — a
+repeat index run adds nothing new for a relationship that already
+exists.
+
+## embeddings (Sprint 14)
+
+| Column       | Type    | Constraints                                                          | Notes                                        |
+|--------------|---------|---------------------------------------------------------------------------|--------------------------------------------------|
+| id           | TEXT    | PRIMARY KEY                                                              |                                                   |
+| project_id   | TEXT    | FK → projects.id                                                        | nullable                                         |
+| entity_type  | TEXT    | NOT NULL, CHECK IN ('file','memory','workflow')                        | what was embedded                                |
+| entity_id    | TEXT    | NOT NULL                                                                 | the source row's id (`files.id`/`memory.id`/`workflows.id`) |
+| content_hash | TEXT    | NOT NULL                                                                 | sha256 of the embedded text — lets a repeat embed run skip unchanged content |
+| provider     | TEXT    | NOT NULL                                                                 | `openai`/`gemini`/`ollama` (Anthropic has no embeddings API) |
+| model        | TEXT    | NOT NULL                                                                 |                                                   |
+| dimensions   | INTEGER | NOT NULL                                                                 | length of `vector`, whatever the provider actually returned |
+| vector       | TEXT    | NOT NULL                                                                 | JSON-encoded `float[]` — SQLite has no native vector type |
+| text_preview | TEXT    |                                                                           | nullable, first ~280 chars of the embedded text, for search-result display |
+| created_at   | TEXT    | NOT NULL                                                                 |                                                   |
+
+Index: `idx_embeddings_project_entity` on `(project_id, entity_type)`.
+Unique constraint: `(project_id, entity_type, entity_id)`.
+
+Real vectors from a real provider call
+(`backend/app/ai/embeddings.py`), never fabricated. Semantic search
+(`backend/app/knowledge/semantic.py`) computes cosine similarity
+brute-force in Python at query time against whatever rows share the
+querying provider+model — appropriate at this app's single-user,
+low-thousands-of-rows scale; a dedicated vector index would be
+premature infrastructure. Comparing vectors from two different
+embedding spaces would be meaningless, so a query only ever scores
+rows embedded with the exact same provider+model it's using.
+
 ---
 
 # RELATIONSHIPS
@@ -319,11 +416,17 @@ milestones 1---* agent_tasks    (agent_tasks.milestone_id; nullable — null for
 agents   (standalone, referenced by tasks.agent as a name, not a FK —
           keeps task history readable even if an agent is later removed;
           agent_tasks.agent_role is likewise a name, not a FK)
+projects 1---* graph_nodes      (project_id nullable)
+projects 1---* graph_edges      (project_id nullable)
+projects 1---* embeddings       (project_id nullable)
+graph_nodes 1---* graph_edges   (graph_edges.from_node_id, graph_edges.to_node_id — both FKs into graph_nodes)
+graph_nodes 0..1---1 files/agent_tasks/workflows/etc.  (graph_nodes.ref_id — an id into the real backing row, when one exists; not a FK, since ref_id's target table varies by node_type)
+embeddings 0..1---1 files/memory/workflows  (embeddings.entity_id — same "id into whichever table entity_type names" pattern as graph_nodes.ref_id, not a FK)
 ```
 
 ---
 
-# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7, Sprint 10, Sprint 11, Sprint 12, Sprint 13)
+# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7, Sprint 10, Sprint 11, Sprint 12, Sprint 13, Sprint 14)
 
 - Schema implemented exactly as designed above:
   `backend/app/db/schema.py::SCHEMA_STATEMENTS` /  `init_db()`.
@@ -366,6 +469,16 @@ agents   (standalone, referenced by tasks.agent as a name, not a FK —
   `agent_tasks` (agent pipeline scheduling) and Sprint 12's
   `workflows` (AI Project Manager goals) — different tables for
   different concerns, not a rename.
+- **`graph_nodes`/`graph_edges`/`embeddings` are new tables added this
+  sprint (Sprint 14)**, backing the Knowledge Graph and Semantic
+  Search — see their table sections above and ARCHITECTURE.md's
+  KNOWLEDGE GRAPH & AI MEMORY ENGINE section for the full design.
+  `files` went from schema-ready (Sprint 3) to genuinely implemented
+  this sprint, and `memory`'s remaining four `type` values gained real
+  writers (see the `memory` table section above) — the same
+  "database before business logic" pattern this document has followed
+  every sprint since Sprint 3: the schema existed first, the feature
+  arrived when it was actually needed.
 - **`history` went from schema-ready to genuinely implemented this
   sprint (Sprint 13)**, its first real use since being designed in
   Sprint 3 — see the `history` table section above.

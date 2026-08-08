@@ -11,3 +11,16 @@ export function joinPath(root: string, relative: string): string {
   const normalizedRelative = relative.replace(/^[\\/]+/, '');
   return `${normalizedRoot}/${normalizedRelative}`;
 }
+
+/** Inverse of joinPath — strips a project root off an absolute file path
+ * (as Monaco/the Explorer track it) to get the `relative_path` form the
+ * backend's knowledge graph indexes files under. Returns null if `full`
+ * isn't actually under `root` (shouldn't happen for files opened from
+ * within the current project, but callers should treat it as "can't
+ * resolve" rather than guessing). */
+export function relativePath(root: string, full: string): string | null {
+  const normalizedRoot = root.replace(/\\/g, '/').replace(/\/+$/, '');
+  const normalizedFull = full.replace(/\\/g, '/');
+  if (!normalizedFull.startsWith(`${normalizedRoot}/`)) return null;
+  return normalizedFull.slice(normalizedRoot.length + 1);
+}

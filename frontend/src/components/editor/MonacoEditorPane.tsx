@@ -12,6 +12,7 @@ import {
 } from '../../settings/editorSettings';
 import { useAi } from '../../ai/useAi';
 import type { AiContextValue } from '../../ai/ai-context';
+import { useKnowledge } from '../../knowledge/useKnowledge';
 
 const AUTO_SAVE_DEBOUNCE_MS = 1000;
 
@@ -118,6 +119,12 @@ export function MonacoEditorPane({ groupId }: MonacoEditorPaneProps) {
     askAboutSelectionRef.current = askAboutSelection;
   }, [askAboutSelection]);
 
+  const { explainFile } = useKnowledge();
+  const explainFileRef = useRef(explainFile);
+  useEffect(() => {
+    explainFileRef.current = explainFile;
+  }, [explainFile]);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<MonacoNS | null>(null);
@@ -211,6 +218,37 @@ export function MonacoEditorPane({ groupId }: MonacoEditorPaneProps) {
           },
         });
       }
+
+      // Sprint 14, Architecture Intelligence: unlike the actions above
+      // (which attach the selection/file text itself), this gathers real
+      // retrieved context — knowledge-graph relationships, recorded
+      // decisions/bugs/fixes, and git history — and attaches THAT, so the
+      // model answers "why/where/what would break/who changed it" from
+      // actual project history rather than guessing from the code alone.
+      editor.addAction({
+        id: 'nemi.ai.explainHistory',
+        label: 'AI: Explain File History & Impact',
+        contextMenuGroupId: 'nemi-ai',
+        contextMenuOrder: 6,
+        keybindings: [
+          monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyH,
+        ],
+        run: () => {
+          const path = activePathRef.current;
+          if (!path) return;
+          void explainFileRef.current(path).then((result) => {
+            if (!result) return;
+            askAboutSelectionRef.current({
+              prompt:
+                'Using the context above, explain why this file likely exists, where it is ' +
+                'used, what could break if it changes, and who has changed it recently.',
+              path: result.path,
+              content: result.context,
+              autoSend: true,
+            });
+          });
+        },
+      });
 
       setReady(true);
     });

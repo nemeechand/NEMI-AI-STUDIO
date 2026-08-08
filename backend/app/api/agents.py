@@ -16,6 +16,8 @@ from app.core.config import get_settings
 from app.db.connection import get_connection
 from app.db.repositories.agent_tasks_repository import AgentTasksRepository
 from app.db.repositories.agents_repository import AgentsRepository
+from app.db.repositories.knowledge_repository import KnowledgeRepository
+from app.db.repositories.memory_repository import MemoryRepository
 
 router = APIRouter(prefix="/agents")
 
@@ -124,9 +126,47 @@ def mark_files_applied(task_id: str) -> dict[str, Any]:
     settings = get_settings()
     with get_connection(settings) as connection:
         repo = AgentTasksRepository(connection)
+        task_before = repo.get(task_id)
         if not repo.mark_files_applied(task_id):
             raise HTTPException(status_code=404, detail="Task not found")
-        return repo.get(task_id)  # type: ignore[return-value]
+        result = repo.get(task_id)
+        if task_before is not None and task_before.get("proposed_files"):
+            _record_architecture_change(connection, task_before)
+        connection.commit()
+        return result  # type: ignore[return-value]
+
+
+def _record_architecture_change(connection: Any, task: dict[str, Any]) -> None:
+    """Sprint 14, Persistent AI Memory: applying a Developer task's
+    proposed files is a real architecture change — the one moment code on
+    disk actually moved — so it's recorded as `knowledge` memory (browsable
+    via GET /knowledge/memory) and, when the task belongs to a workflow, as
+    a `workflow --modifies--> file` graph edge for each applied path."""
+    paths = [f["path"] for f in task["proposed_files"]]
+    MemoryRepository(connection).remember(
+        project_id=task["project_id"],
+        type="knowledge",
+        key=f"change:{task['id']}",
+        value=f"Task '{task['title']}' applied changes to: {', '.join(paths)}",
+    )
+    if not task.get("workflow_id"):
+        return
+    graph_repo = KnowledgeRepository(connection)
+    workflow_node = graph_repo.find_node_by_ref(
+        project_id=task["project_id"], node_type="workflow", ref_id=task["workflow_id"]
+    )
+    if workflow_node is None:
+        return
+    for path in paths:
+        file_node = graph_repo.find_node(
+            project_id=task["project_id"], node_type="file", label=path
+        )
+        if file_node is None:
+            continue
+        graph_repo.add_edge(
+            project_id=task["project_id"], from_node_id=workflow_node["id"],
+            to_node_id=file_node["id"], relationship="modifies",
+        )
 
 
 @router.post("/run-cycle", response_model=AgentRunCycleResult)

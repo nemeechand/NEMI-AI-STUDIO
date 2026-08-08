@@ -8,6 +8,7 @@ from typing import Any
 from app.ai.agent_roles import load_agent_roles
 from app.ai.errors import MissingApiKeyError, ProviderError
 from app.ai.orchestration.project_manager import (
+    _MILESTONE_PIPELINE,
     MILESTONE_FORMAT_INSTRUCTION,
     create_milestone_pipelines,
     parse_milestones,
@@ -22,6 +23,7 @@ from app.db.repositories.agents_repository import AgentsRepository
 from app.db.repositories.ai_conversations_repository import ConversationsRepository
 from app.db.repositories.ai_messages_repository import MessagesRepository
 from app.db.repositories.history_repository import HistoryRepository
+from app.db.repositories.knowledge_repository import KnowledgeRepository
 from app.db.repositories.memory_repository import MemoryRepository
 from app.db.repositories.milestones_repository import MilestonesRepository, MilestoneStatus
 from app.db.repositories.workflows_repository import WorkflowsRepository
@@ -133,6 +135,19 @@ def _handle_failure(settings: Settings, task_id: str, message: str) -> None:
                         "dependents_cancelled": cancelled,
                     },
                 )
+                # Sprint 14: Persistent AI Memory — a permanently-failed task
+                # is a real "bug" the knowledge base should remember, so a
+                # future goal touching similar work can be warned by it (see
+                # _related_past_experience below).
+                MemoryRepository(connection).remember(
+                    project_id=task["project_id"],
+                    type="knowledge",
+                    key=f"bug:{task_id}",
+                    value=(
+                        f"Task '{task['title']}' ({task['agent_role']}) failed permanently "
+                        f"after {task['retry_count'] + 1} attempt(s): {message}"
+                    ),
+                )
 
 
 async def _execute(settings: Settings, task: dict[str, Any], api_keys: dict[str, str]) -> None:
@@ -167,6 +182,22 @@ async def _execute(settings: Settings, task: dict[str, Any], api_keys: dict[str,
                 user_content = (
                     f"Context from the prior stage of this pipeline:\n\n{prior}\n\n"
                     f"---\n\nYour task:\n\n{task['description']}"
+                )
+
+        # Sprint 14, AI Learning: retrieval over real past sprint summaries
+        # (recorded in `_sync_workflow_progress` below) — a genuine, bounded
+        # form of "improve future planning using previous projects": the
+        # Planner sees what actually happened last time, it isn't claimed to
+        # have learned anything on its own. Only for the one goal-
+        # decomposition task per workflow, since that's the only point a
+        # brand-new goal is being planned from scratch.
+        if is_decomposition_task:
+            experience = _related_past_experience(connection, task["description"])
+            if experience:
+                user_content += (
+                    "\n\n---\n\nRelevant experience from previous sprints (use this to avoid "
+                    "repeating past mistakes and to plan more effectively):\n"
+                    + "\n".join(f"- {line}" for line in experience)
                 )
 
         agent_row = AgentsRepository(connection).get_by_role_key(settings.agents_dir, role_key)
@@ -241,11 +272,57 @@ async def _execute(settings: Settings, task: dict[str, Any], api_keys: dict[str,
             proposed_files=proposed_files or None,
         )
 
+        # Sprint 14: a task that needed one or more retries before it
+        # finally succeeded is a real "fix" worth remembering — retry_count
+        # here is the value BEFORE this run (mark_failed_or_retry is what
+        # increments it, on a *previous* run), so > 0 means this run is the
+        # one that got it right after prior failure(s).
+        if task["retry_count"] > 0:
+            MemoryRepository(connection).remember(
+                project_id=task["project_id"],
+                type="knowledge",
+                key=f"fix:{task['id']}",
+                value=(
+                    f"Task '{task['title']}' ({task['agent_role']}) succeeded on attempt "
+                    f"{task['retry_count'] + 1} after {task['retry_count']} prior failure(s)."
+                ),
+            )
+
         if role_key == "developer" and proposed_files and task["workflow_id"]:
             _detect_conflicts(connection, task, proposed_files)
 
         if is_decomposition_task:
             _apply_decomposition(connection, task, content)
+
+
+_STOPWORDS = {
+    "the", "a", "an", "and", "or", "for", "to", "of", "in", "on", "with", "that", "this",
+    "is", "are", "be", "it", "as", "at", "by", "from", "into", "using", "use", "add", "build",
+}
+
+
+def _related_past_experience(connection: Any, goal_text: str, limit: int = 3) -> list[str]:
+    """Simple, real token-overlap ranking over every project's recorded
+    sprint summaries and captured bugs/fixes — no embedding call required
+    (this runs unconditionally for every workflow, even with no embedding
+    provider configured), so this is deliberately cheap keyword scoring
+    rather than semantic search. Cross-project on purpose: "previous
+    projects", per Sprint 14's spec, not just this one."""
+    goal_words = {w for w in re.findall(r"[a-z0-9]+", goal_text.lower()) if len(w) > 2} - _STOPWORDS
+    if not goal_words:
+        return []
+    rows = connection.execute(
+        "SELECT key, value FROM memory WHERE type IN ('long_term', 'knowledge') "
+        "ORDER BY updated_at DESC LIMIT 300"
+    ).fetchall()
+    scored: list[tuple[int, str]] = []
+    for row in rows:
+        entry_words = {w for w in re.findall(r"[a-z0-9]+", row["value"].lower()) if len(w) > 2}
+        overlap = len(goal_words & entry_words)
+        if overlap > 0:
+            scored.append((overlap, row["value"][:400]))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [text for _, text in scored[:limit]]
 
 
 def _detect_conflicts(
@@ -299,6 +376,48 @@ def _apply_decomposition(connection: Any, task: dict[str, Any], content: str) ->
         decomposition_task_id=task["id"],
     )
     WorkflowsRepository(connection).set_status(workflow["id"], "queued")
+    _record_knowledge_for_workflow(connection, workflow)
+
+
+def _record_knowledge_for_workflow(connection: Any, workflow: dict[str, Any]) -> None:
+    """Sprint 14, Knowledge Graph: a workflow IS a "Sprint" in the graph's
+    vocabulary (see docs/ARCHITECTURE.md) — its goal doubles as its
+    "Requirement" node (implements edge) since there's no separate
+    requirements-gathering feature to derive one from, and it's linked to
+    the four agent roles its pipeline will run (executed_by) — known
+    upfront from the fixed Planner/Developer/Reviewer/Tester pipeline, not
+    waited-for after the fact."""
+    graph_repo = KnowledgeRepository(connection)
+    workflow_node = graph_repo.upsert_node(
+        project_id=workflow["project_id"], node_type="workflow", label=workflow["title"],
+        ref_id=workflow["id"], metadata={"goal": workflow["goal"]},
+    )
+    if workflow["project_id"]:
+        project_node = graph_repo.upsert_node(
+            project_id=workflow["project_id"], node_type="project", label=workflow["project_id"],
+            ref_id=workflow["project_id"],
+        )
+        graph_repo.add_edge(
+            project_id=workflow["project_id"], from_node_id=project_node["id"],
+            to_node_id=workflow_node["id"], relationship="contains",
+        )
+    requirement_node = graph_repo.upsert_node(
+        project_id=workflow["project_id"], node_type="requirement",
+        label=f"requirement:{workflow['id']}", metadata={"goal": workflow["goal"]},
+    )
+    graph_repo.add_edge(
+        project_id=workflow["project_id"], from_node_id=workflow_node["id"],
+        to_node_id=requirement_node["id"], relationship="implements",
+    )
+    for role in _MILESTONE_PIPELINE:
+        agent_node = graph_repo.upsert_node(
+            project_id=workflow["project_id"], node_type="agent", label=role
+        )
+        graph_repo.add_edge(
+            project_id=workflow["project_id"], from_node_id=workflow_node["id"],
+            to_node_id=agent_node["id"], relationship="executed_by",
+        )
+    connection.commit()
 
 
 def _sync_workflow_progress(settings: Settings, workflow_id: str) -> None:
@@ -344,6 +463,7 @@ def _sync_workflow_progress(settings: Settings, workflow_id: str) -> None:
         if all_statuses <= {"completed"}:
             workflows_repo.set_status(workflow_id, "completed")
             _record_workflow_history(connection, workflow, "completed")
+            _record_sprint_summary_memory(connection, workflow, milestones, tasks)
         elif "failed" in all_statuses:
             workflows_repo.set_status(
                 workflow_id,
@@ -367,4 +487,30 @@ def _record_workflow_history(connection: Any, workflow: dict[str, Any], new_stat
         entity_id=workflow["id"],
         action="updated",
         snapshot={"status": new_status, "title": workflow["title"], "goal": workflow["goal"]},
+    )
+
+
+def _record_sprint_summary_memory(
+    connection: Any,
+    workflow: dict[str, Any],
+    milestones: list[dict[str, Any]],
+    tasks: list[dict[str, Any]],
+) -> None:
+    """Persistent AI Memory / Long-term Memory: a real, durable "what
+    happened in this Sprint" record — retrieved by `_related_past_experience`
+    above the next time a related goal is planned, and browsable directly
+    via `GET /knowledge/memory`. Written once, when the workflow reaches
+    'completed' (a permanently-failed workflow's individual task failures
+    are already captured as `bug:` entries in `_handle_failure`)."""
+    milestone_titles = ", ".join(m["title"] for m in milestones) or "(none)"
+    summary = (
+        f"Sprint '{workflow['title']}' completed.\nGoal: {workflow['goal']}\n"
+        f"Milestones ({len(milestones)}): {milestone_titles}\n"
+        f"Tasks completed: {len(tasks)}"
+    )
+    MemoryRepository(connection).remember(
+        project_id=workflow["project_id"],
+        type="long_term",
+        key=f"sprint:{workflow['id']}",
+        value=summary,
     )

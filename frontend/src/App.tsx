@@ -5,6 +5,7 @@ import { AiProvider } from './ai/AiProvider';
 import { AgentsProvider } from './agents/AgentsProvider';
 import { WorkflowsProvider } from './workflows/WorkflowsProvider';
 import { IntelligenceProvider } from './intelligence/IntelligenceProvider';
+import { KnowledgeProvider } from './knowledge/KnowledgeProvider';
 import { AppShell } from './components/layout/AppShell';
 
 function App() {
@@ -16,7 +17,9 @@ function App() {
             <AgentsProvider>
               <WorkflowsProvider>
                 <IntelligenceProvider>
-                  <AppShell />
+                  <KnowledgeProvider>
+                    <AppShell />
+                  </KnowledgeProvider>
                 </IntelligenceProvider>
               </WorkflowsProvider>
             </AgentsProvider>

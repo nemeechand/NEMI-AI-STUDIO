@@ -281,6 +281,137 @@ declare global {
     created_at: string;
   }
 
+  type KnowledgeNodeType =
+    | 'project'
+    | 'file'
+    | 'function'
+    | 'class'
+    | 'agent'
+    | 'workflow'
+    | 'commit'
+    | 'user'
+    | 'requirement';
+  type KnowledgeRelationship =
+    | 'contains'
+    | 'defines'
+    | 'imports'
+    | 'modifies'
+    | 'executed_by'
+    | 'authored_by'
+    | 'implements'
+    | 'related_to';
+
+  interface GraphNode {
+    id: string;
+    project_id: string | null;
+    node_type: KnowledgeNodeType;
+    label: string;
+    ref_id: string | null;
+    metadata: Record<string, unknown> | null;
+  }
+
+  interface GraphEdge {
+    id: string;
+    project_id: string | null;
+    from_node_id: string;
+    to_node_id: string;
+    relationship: KnowledgeRelationship;
+  }
+
+  interface KnowledgeGraph {
+    nodes: GraphNode[];
+    edges: GraphEdge[];
+  }
+
+  interface KnowledgeStats {
+    nodes_by_type: Record<string, number>;
+    total_nodes: number;
+    total_edges: number;
+    files_indexed: number;
+    embeddings_count: number;
+  }
+
+  interface IndexResult {
+    files_indexed: number;
+    files_removed: number;
+    functions_found: number;
+    classes_found: number;
+    edges_created: number;
+    commits_indexed: number;
+    truncated: boolean;
+    duration_ms: number;
+    errors: string[];
+  }
+
+  interface EmbeddingProviderInfo {
+    id: string;
+    display_name: string;
+    requires_api_key: boolean;
+    default_model: string;
+  }
+
+  interface EmbedResult {
+    embedded: number;
+    skipped_unchanged: number;
+    failed: number;
+    provider: string;
+    model: string;
+  }
+
+  type KnowledgeSearchMode = 'semantic' | 'keyword_fallback';
+
+  interface SearchHit {
+    entity_type: string;
+    entity_id: string;
+    score: number;
+    preview: string;
+  }
+
+  interface SearchResult {
+    mode: KnowledgeSearchMode;
+    fallback_reason: string | null;
+    hits: SearchHit[];
+  }
+
+  interface ImpactResult {
+    file: string;
+    found: boolean;
+    dependents: string[];
+    defines: string[];
+    related_bugs: string[];
+    risk_score: number;
+    risk_label: string;
+  }
+
+  interface DiagramResult {
+    mermaid: string;
+    node_count: number;
+    edge_count: number;
+    truncated: boolean;
+  }
+
+  interface FileContext {
+    file: string;
+    found_in_graph: boolean;
+    imported_by: string[];
+    defines: string[];
+    related_memory: Array<{ type: string; key: string; value: string; updated_at: string }>;
+    risk_score: number;
+    risk_label: string;
+  }
+
+  type MemoryEntryType = 'project' | 'conversation' | 'long_term' | 'task' | 'knowledge';
+
+  interface MemoryEntry {
+    id: string;
+    project_id: string | null;
+    type: string;
+    key: string;
+    value: string;
+    created_at: string;
+    updated_at: string;
+  }
+
   interface Window {
     nemi: {
       windowControls: {
@@ -402,6 +533,32 @@ declare global {
         getPerformance: (projectId: string | null) => Promise<PerformanceStats>;
         getTokens: () => Promise<TokenStats>;
         getHistory: (projectId: string | null, limit?: number) => Promise<HistoryEntry[]>;
+      };
+      knowledge: {
+        index: (projectId: string, projectPath: string) => Promise<IndexResult>;
+        getGraph: (projectId: string) => Promise<KnowledgeGraph>;
+        getStats: (projectId: string) => Promise<KnowledgeStats>;
+        listEmbeddingProviders: () => Promise<EmbeddingProviderInfo[]>;
+        generateEmbeddings: (input: {
+          projectId: string;
+          projectPath: string;
+          provider: string;
+          model: string;
+        }) => Promise<EmbedResult>;
+        search: (input: {
+          projectId: string;
+          query: string;
+          provider?: string | null;
+          model?: string | null;
+        }) => Promise<SearchResult>;
+        getImpact: (projectId: string, file: string) => Promise<ImpactResult>;
+        getFileContext: (projectId: string, file: string) => Promise<FileContext>;
+        getFileHistory: (projectPath: string, file: string) => Promise<string>;
+        getDiagram: (
+          projectId: string,
+          type: 'dependency' | 'architecture',
+        ) => Promise<DiagramResult>;
+        listMemory: (projectId: string | null, type: MemoryEntryType) => Promise<MemoryEntry[]>;
       };
     };
   }

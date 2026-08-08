@@ -213,6 +213,70 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_milestones_workflow_id ON milestones(workflow_id)",
+    # Sprint 14: the knowledge graph. A relational (not a dedicated graph-DB)
+    # model, consistent with this project's SQLite-only architecture — nodes
+    # reference the *real* row that backs them (ref_id into files/agent_tasks/
+    # workflows/etc, or null for a derived node like a git author) rather than
+    # duplicating that data, so the graph stays cheap to keep in sync. See
+    # docs/ARCHITECTURE.md's KNOWLEDGE GRAPH ENGINE section for the full node/
+    # relationship vocabulary and what's deliberately NOT modeled (no per-task
+    # nodes, no external-package nodes for unresolved imports).
+    """
+    CREATE TABLE IF NOT EXISTS graph_nodes (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id),
+        node_type TEXT NOT NULL CHECK (node_type IN
+            ('project', 'file', 'function', 'class', 'agent', 'workflow',
+             'commit', 'user', 'requirement')),
+        label TEXT NOT NULL,
+        ref_id TEXT,
+        metadata TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (project_id, node_type, label)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_graph_nodes_project_type ON graph_nodes(project_id, node_type)",
+    """
+    CREATE TABLE IF NOT EXISTS graph_edges (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id),
+        from_node_id TEXT NOT NULL REFERENCES graph_nodes(id),
+        to_node_id TEXT NOT NULL REFERENCES graph_nodes(id),
+        relationship TEXT NOT NULL CHECK (relationship IN
+            ('contains', 'defines', 'imports', 'modifies', 'executed_by',
+             'authored_by', 'implements', 'related_to')),
+        metadata TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (from_node_id, to_node_id, relationship)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_graph_edges_from ON graph_edges(from_node_id)",
+    "CREATE INDEX IF NOT EXISTS idx_graph_edges_to ON graph_edges(to_node_id)",
+    # Sprint 14: real embedding vectors (never fabricated similarity) for
+    # semantic search — brute-force cosine similarity at query time in
+    # Python (app/knowledge/semantic_search.py), which is honest and
+    # sufficient at this app's single-user, low-thousands-of-entities scale;
+    # a dedicated vector index would be premature infrastructure. `vector`
+    # is a JSON-encoded float array (SQLite has no native vector type).
+    """
+    CREATE TABLE IF NOT EXISTS embeddings (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id),
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('file', 'memory', 'workflow')),
+        entity_id TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        dimensions INTEGER NOT NULL,
+        vector TEXT NOT NULL,
+        text_preview TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (project_id, entity_type, entity_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_embeddings_project_entity "
+    "ON embeddings(project_id, entity_type)",
 )
 
 

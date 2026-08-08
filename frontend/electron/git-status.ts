@@ -103,3 +103,47 @@ export async function getGitStatus(projectPath: string): Promise<GitStatus> {
     return NOT_A_REPO;
   }
 }
+
+export interface CommitWithFiles extends GitCommit {
+  files: string[];
+}
+
+// A sentinel unlikely to appear in a real commit message/filename, used to
+// mark the boundary between one commit's header and its changed-file list
+// in a single `git log --name-only` call — one process spawn instead of N,
+// which matters once Sprint 14's knowledge indexer wants file-level
+// commit->file "modifies" edges for a real project history.
+const COMMIT_BOUNDARY = '\x02NEMI-COMMIT\x02';
+
+/**
+ * Real commit history (bounded to `limit`) with each commit's changed file
+ * paths — feeds the Sprint 14 knowledge graph's commit/author/`modifies`
+ * nodes. Git access itself stays here (Sprint 13's git ownership rule);
+ * the backend only ever receives what this function already gathered.
+ */
+export async function getCommitLog(projectPath: string, limit = 50): Promise<CommitWithFiles[]> {
+  try {
+    const inside = await git(projectPath, ['rev-parse', '--is-inside-work-tree']).catch(
+      () => 'false',
+    );
+    if (inside !== 'true') return [];
+
+    const raw = await git(projectPath, [
+      'log',
+      `--pretty=format:${COMMIT_BOUNDARY}${LOG_FORMAT}`,
+      '--name-only',
+      `-${limit}`,
+    ]).catch(() => '');
+    if (!raw) return [];
+
+    const blocks = raw.split(COMMIT_BOUNDARY).filter(Boolean);
+    return blocks.map((block) => {
+      const lines = block.split('\n').filter((line) => line.length > 0);
+      const [hash, message, author, date] = (lines[0] ?? '').split('\x1f');
+      const files = lines.slice(1);
+      return { hash: (hash ?? '').slice(0, 8), message, author, date, files };
+    });
+  } catch {
+    return [];
+  }
+}

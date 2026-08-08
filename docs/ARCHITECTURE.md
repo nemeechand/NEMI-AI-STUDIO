@@ -1,8 +1,8 @@
 # ARCHITECTURE.md
 
-Version: 2.0
-Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8); Monaco Code Editor Locked (Sprint 9); AI Chat & Agent Framework Locked (Sprint 10); Agent Orchestration Framework Locked (Sprint 11); Workflow Engine & AI Project Manager Locked (Sprint 12); Live Development Dashboard & Intelligence Center Locked (Sprint 13)
-Governs: Sprint 13 onward
+Version: 2.1
+Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8); Monaco Code Editor Locked (Sprint 9); AI Chat & Agent Framework Locked (Sprint 10); Agent Orchestration Framework Locked (Sprint 11); Workflow Engine & AI Project Manager Locked (Sprint 12); Live Development Dashboard & Intelligence Center Locked (Sprint 13); Knowledge Graph & AI Memory Engine Locked (Sprint 14)
+Governs: Sprint 14 onward
 
 ---
 
@@ -143,8 +143,8 @@ Three processes, already implemented and hardened in Sprint 2:
 ## IPC Boundary (locked decision)
 
 All renderer → native calls go through `window.nemi`
-(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 13
-this surface has eleven namespaces: `windowControls` (Sprint 2),
+(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 14
+this surface has twelve namespaces: `windowControls` (Sprint 2),
 `backend` (Sprint 4: `health()`; Sprint 5: `logs()`), `fs`
 (Sprint 5: project/file CRUD + change notifications; Sprint 7:
 `selectDirectory()`, `createDirectory()`; Sprint 9: `listAllFiles()`
@@ -165,8 +165,12 @@ FRAMEWORK below), `workflows` (Sprint 12: `list()`, `get()`,
 — see LIVE DEVELOPMENT DASHBOARD & INTELLIGENCE CENTER below), `git`
 (Sprint 13: `getStatus()`), `build` (Sprint 13: `detectRunners()`,
 `runBuild()`/`runTests()`/`runVerification()`, `cancelRunner()`,
-`onOutput()`), and `stats` (Sprint 13: `getPerformance()`,
-`getTokens()`, `getHistory()`). A component must never assume Node.js
+`onOutput()`), `stats` (Sprint 13: `getPerformance()`,
+`getTokens()`, `getHistory()`), and `knowledge` (Sprint 14: `index()`,
+`getGraph()`, `getStats()`, `listEmbeddingProviders()`,
+`generateEmbeddings()`, `search()`, `getImpact()`, `getFileContext()`,
+`getFileHistory()`, `getDiagram()`, `listMemory()` — see KNOWLEDGE
+GRAPH & AI MEMORY ENGINE below). A component must never assume Node.js
 globals exist. All ambient types shared across `window.nemi` methods
 (`ExplorerEntry`, `LogEntry`, `BackendHealth`, `ProjectRecord`,
 `SearchMatch`, `SearchOptions`, `AiProviderInfo`, `AiConversation`,
@@ -175,9 +179,12 @@ globals exist. All ambient types shared across `window.nemi` methods
 `WorkflowDetail`, `Milestone`, `ResourceUsage`, `SystemMetrics`,
 `GitStatus`, `GitCommit`, `RunnerId`, `RunnerOutputEvent`,
 `RunnerStatusEvent`, `AvailableRunners`, `PerformanceStats`,
-`TokenStats`, `HistoryEntry`, etc.) live inside the `declare global`
-block of `electron-api.d.ts` so they're usable anywhere in the
-renderer without imports.
+`TokenStats`, `HistoryEntry`, `GraphNode`, `GraphEdge`,
+`KnowledgeGraph`, `KnowledgeStats`, `IndexResult`,
+`EmbeddingProviderInfo`, `EmbedResult`, `SearchResult`, `ImpactResult`,
+`DiagramResult`, `FileContext`, `MemoryEntry`, etc.) live inside the
+`declare global` block of `electron-api.d.ts` so they're usable
+anywhere in the renderer without imports.
 
 The renderer never talks to the backend HTTP API directly — it has no
 network access to it, and the CSP's `connect-src 'self'` intentionally
@@ -1145,6 +1152,225 @@ tasks aren't tracked at that resolution).
 
 ---
 
+# KNOWLEDGE GRAPH & AI MEMORY ENGINE (locked decision — Sprint 14)
+
+Enables NEMI AI Studio to remember, connect, search, and reason over
+every project artifact across time — built entirely on real,
+retrievable data; no capability here is simulated or hard-coded to
+look intelligent. Where a request had no honest real implementation
+available at this scope, it was mapped to the closest real,
+transparent mechanism rather than faked (see each subsection below).
+
+## Knowledge Graph: a relational graph, not a graph database
+
+`graph_nodes`/`graph_edges` (new tables, `backend/app/db/schema.py`) —
+SQLite stays the only datastore, consistent with this project's
+locked architecture; a dedicated graph database would be premature
+infrastructure at this app's scale. `KnowledgeRepository`
+(`backend/app/db/repositories/knowledge_repository.py`) provides
+find-or-create `upsert_node()`/idempotent `add_edge()`, so re-indexing
+never duplicates. The node vocabulary
+(`project`/`file`/`function`/`class`/`agent`/`workflow`/`commit`/
+`user`/`requirement`) and relationship vocabulary
+(`contains`/`defines`/`imports`/`modifies`/`executed_by`/
+`authored_by`/`implements`/`related_to`) are both closed CHECK-
+constrained sets, deliberately scoped:
+
+- **No per-task nodes.** `agent_tasks` rows stay in their own table,
+  richly queryable there already — modeling each one as a graph node
+  too would multiply node count for no new relationship the existing
+  table can't already answer.
+- **"Sprint" = `workflow`.** There's no separate sprint concept in
+  this codebase (a `workflows` row already *is* a Sprint 12 AI Project
+  Manager goal-run) — reusing it avoids a redundant parallel table.
+- **"Requirement" is derived, not gathered.** No requirements-
+  intake feature exists, so a workflow's `goal` text doubles as its
+  one `requirement` node (`implements` edge) — an honest 1:1 mapping,
+  not a fabricated requirements-tracking system.
+- **"User" = git commit author**, a real string from `git log`, not a
+  multi-account user system (this remains a single-user desktop app).
+- **Unresolved imports (external npm/pip packages) are not modeled**
+  as nodes — only same-project files the heuristic resolver can
+  actually locate get an `imports` edge; a graph of every third-party
+  package name would be noise, not signal.
+
+`backend/app/knowledge/indexer.py::index_project()` builds the
+structural half: walks the *open project's* files directly from disk
+(`project_path`, already the value stored on its `projects` row) —
+**a deliberate, scoped exception to Sprint 5's Filesystem Ownership
+rule.** Sprint 5 assigned interactive CRUD and live file-watching to
+Electron because there's no cross-machine scenario to justify a
+round-trip. Bulk, read-only, non-interactive indexing that feeds
+straight into SQLite is different: it's a data-layer/analysis
+concern, and round-tripping every file's content through IPC just to
+hand it back to the backend for storage would be pure overhead. Git
+history stays Electron's job as before (`git-status.ts::getCommitLog()`,
+one `git log --name-only` call, not N) — the indexer only records
+commit/author/`modifies` nodes from what Electron already gathered.
+Bounded like every other bulk operation in this app:
+`MAX_FILES = 3000` files walked, `MAX_PARSE_BYTES = 500 KB` per file
+for symbol extraction (still gets a `file` node past that size, just
+no parsed symbols) — `truncated: true` in the response when the cap
+is hit, never silently.
+
+## Code parsing: heuristic, not a compiler front-end
+
+`backend/app/knowledge/code_parser.py` — regex-based extraction of
+Python/JavaScript/TypeScript function/class declarations and imports.
+**Explicitly not a full multi-language AST parser** (tree-sitter or
+per-language compiler front-ends would be their own sprint) — it can
+miss dynamically-generated declarations or unusual formatting, and it
+does not understand lexical scope (a method inside a class, or a
+function nested in another function, is still reported as a top-level
+symbol of its file). This is a real, working, honestly-scoped
+approximation, stated as such rather than oversold. Import resolution
+is likewise real but bounded: relative JS/TS imports resolve against
+the importing file's directory (trying the standard extension/`index`
+variants); Python imports resolve via a dotted-module index built
+from every indexed `.py` file's own path, with an unambiguous-suffix
+fallback. A `.py`/`.js`/`.ts` import that can't be matched to an
+indexed project file (i.e. an external package) is simply not turned
+into an edge.
+
+## Persistent AI Memory / Long-term Memory: `memory`'s remaining types
+
+Sprint 11 gave the `memory` table its first real consumer
+(`type='task'`, agent-to-agent handoff). Sprint 14 gives the other
+four types real, specific writers — see DATABASE_SCHEMA.md's `memory`
+section for the exact hook points (`_record_sprint_summary_memory()`,
+`_handle_failure()`'s `bug:` entries, `_execute()`'s `fix:` entries on
+retry-then-succeed, and `agents.py`'s `_record_architecture_change()`
+on file-apply). Every entry is real, derived from an actual state
+transition that already happened — never a periodic summary an LLM
+was asked to "reflect" on. All of it is browsable via
+`GET /knowledge/memory`, and it persists forever in the same
+`database/nemi.db` every other table already lives in — "remember
+decisions forever" is satisfied by SQLite's own durability, not a new
+subsystem.
+
+## AI Learning: real retrieval, not claimed self-improvement
+
+`manager.py::_related_past_experience()` runs a simple, real,
+cross-project token-overlap ranking over recorded `long_term`/
+`knowledge` memory entries, and injects the top matches into the
+Planner's prompt for the one goal-decomposition task per workflow.
+Deliberately NOT an embedding-based lookup (it must work even with no
+embedding provider configured, since it runs unconditionally) and
+deliberately NOT framed as the model having "learned" anything — it's
+retrieval-augmented planning: the Planner sees what actually happened
+in relevant past sprints (including recorded bugs) and can factor that
+in, same as a human engineer skimming old notes before starting
+similar work.
+
+## Semantic Search: real embeddings, honest fallback
+
+`backend/app/ai/embeddings.py` — a small `EmbeddingProvider`
+abstraction parallel to (but separate from) `app.ai.providers`:
+OpenAI (`text-embedding-3-small`), Gemini (`text-embedding-004`), and
+Ollama (`/api/embed`, local, no key). **Anthropic/Claude is absent —
+it publishes no embeddings API**, not mapped to a workaround.
+`backend/app/knowledge/semantic.py::semantic_search()` embeds the
+query with the caller-selected provider and computes cosine similarity
+in Python, brute-force, against whatever's stored in the new
+`embeddings` table for that exact provider+model — appropriate at this
+app's single-user, low-thousands-of-rows scale; comparing vectors from
+two different embedding spaces would be meaningless, so results never
+mix providers. `POST /knowledge/search` reports which mode it actually
+used (`"semantic"` or `"keyword_fallback"`, with a stated reason) —
+falling back to a plain SQL `LIKE` scan whenever no provider/key is
+given, the call fails, or the project has no embeddings yet for that
+provider+model. The UI (`KnowledgePanel.tsx`) surfaces this honestly
+rather than presenting keyword hits as if they were semantic ones.
+
+Generating embeddings (`POST /knowledge/embed`) is a separate,
+explicit, user-triggered action — never automatic during indexing,
+both because it costs real money on a cloud provider and because it's
+genuinely slow on a local CPU-bound model. `gather_candidates()` caps
+file candidates at `MAX_FILE_EMBED_CANDIDATES = 150` (memory/workflow
+candidates are uncapped — they're the highest-value, lowest-volume
+part of "what should this app remember"); batches of `EMBED_BATCH_SIZE
+= 16` texts per provider call, sized for a local model's realistic
+per-request budget rather than a cloud API's. Confirmed live: this
+app's own ~684-file repo produces well over 150 eligible file
+candidates, and embedding even a small five-file real subset through
+local Ollama and then semantically searching it returns genuinely
+differentiated relevance (a code-related query scored its two most
+relevant files at ~0.42/0.42 cosine similarity; an intentionally
+unrelated sanity-check query scored everything lower and in a
+different order) — this is a real embedding space, not a fabricated
+score.
+
+## Architecture Intelligence & Code Impact Analysis: real retrieval, real heuristics
+
+"Why was this written / where is it used / what will break / who
+changed it" is answered by gathering real context and handing it to
+the AI Chat Panel as retrieval-augmented input — **not by asking the
+model to reason unaided.** `backend/app/knowledge/analysis.py::
+gather_file_context()` bundles real graph relationships (`imports`
+edges both directions) and real memory entries mentioning the file;
+`frontend/src/knowledge/KnowledgeProvider.tsx::explainFile()` merges
+that with real git history (`knowledge-client.ts::getFileHistorySummary()`,
+`git log --follow`) gathered by Electron (git access stays Electron's
+job, per Sprint 13's ownership rule — the backend never touches git).
+A new Monaco editor action, "AI: Explain File History & Impact"
+(`Ctrl+Shift+Alt+H`, alongside the existing Explain/Fix/Refactor
+actions from Sprint 10), gathers this bundle for the active file and
+feeds it into the existing `askAboutSelection()` plumbing — no new AI
+infrastructure, the same mechanism every other editor AI action
+already uses.
+
+Code Impact Analysis (`GET /knowledge/impact`) is real and
+transparent, not a machine-learning regression predictor — none
+exists or is claimed to. "Affected files" is a real reverse-graph
+traversal (`imports` edges pointing at the target file). The risk
+score is a stated, simple heuristic
+(`dependents + 2 × related_recorded_bugs`, thresholded into
+low/medium/high) — labeled a heuristic everywhere it's surfaced, never
+implied to be a measured probability.
+
+## Automatic Documentation: real Mermaid, generated not templated
+
+`backend/app/knowledge/analysis.py::generate_dependency_diagram()`/
+`generate_architecture_diagram()` build real Mermaid `graph LR`/
+`graph TD` text from the graph's actual `imports` edges and directory/
+workflow structure — capped at `MAX_DIAGRAM_EDGES = 150` with
+`truncated: true` reported honestly past that. The Knowledge Panel
+exports these as downloadable `.mmd` files (the same `Blob`-download
+pattern Sprint 13's Terminal export already established) rather than
+rendering them in-app — this app has no bundled Mermaid renderer, and
+adding one to render text a user can already view in any standard
+Mermaid-capable tool (GitHub, VS Code, mermaid.live) wasn't judged
+worth the bundle-size cost this sprint.
+
+## Frontend: a new sidebar panel, a new Context+Provider+Hook module
+
+`frontend/src/knowledge/` (`knowledge-context.ts`,
+`KnowledgeProvider.tsx`, `useKnowledge.ts`) follows the exact
+Context+Provider+Hook pattern every prior cross-cutting frontend
+module uses (Theme, Project, Workspace, AI, Agents, Workflows,
+Intelligence). `KnowledgePanel.tsx` is a new Sidebar panel (`Ctrl+B`
+→ Knowledge icon, or the Command Palette) offering Index/Stats,
+Semantic Search, Generate Embeddings, and diagram export — all backed
+by the `window.nemi.knowledge` IPC namespace
+(`frontend/electron/knowledge-client.ts`), the twelfth namespace on
+`window.nemi` (see IPC Boundary above).
+
+## Explicitly out of scope
+
+A full multi-language AST parser (tree-sitter or per-language compiler
+front-ends); a dedicated vector database or ANN index (brute-force
+cosine at this app's data volume is genuinely sufficient); a
+multi-account/multi-user identity system behind the `user` node type;
+in-app Mermaid rendering (exported as `.mmd` instead); background/
+queued embedding generation with progress reporting (a single
+synchronous request with a generous timeout, same tier as Sprint 13's
+build/test runners) — a genuinely large project's full embedding pass
+can take several minutes, and the cap above keeps that bounded rather
+than unbounded, but it isn't yet a cancellable background job the way
+agent workflows are.
+
+---
+
 # PLUGIN / EXTENSION ARCHITECTURE (future — not started)
 
 MASTER_SPECIFICATION.md lists "Plugin Marketplace" under FUTURE
@@ -1366,6 +1592,56 @@ must never run with Node.js integration in the renderer.
     baseline silently; only a transition witnessed *during* the session
     notifies. Found and fixed via live testing after an earlier version
     re-notified for already-failed leftover state on every fresh launch.
+47. **(Sprint 14)** The Knowledge Graph is relational (`graph_nodes`/
+    `graph_edges` in SQLite), not a dedicated graph database — matches
+    this app's SQLite-only architecture at its actual scale.
+    `agent_tasks` are deliberately not modeled as individual nodes; a
+    "Sprint" node IS a `workflows` row (no separate concept); a
+    "Requirement" node is derived 1:1 from a workflow's goal text (no
+    requirements-intake feature exists to source one otherwise).
+48. **(Sprint 14)** The knowledge indexer reads the open project's
+    files directly from disk in the backend, a deliberate, scoped
+    exception to Sprint 5's Filesystem Ownership rule: bulk read-only
+    batch analysis that feeds straight into SQLite is a data-layer
+    concern, distinct from the interactive CRUD/live-watch Sprint 5
+    assigned to Electron. Git history stays Electron's job as before.
+49. **(Sprint 14)** Code parsing is regex-based heuristic extraction
+    (Python/JS/TS function/class/import detection), explicitly not a
+    full AST parser — it doesn't understand lexical scope and can miss
+    unusual formatting, stated as a real limitation, not hidden.
+50. **(Sprint 14)** Anthropic/Claude has no embedding provider — it
+    publishes no embeddings API, so it's simply absent from the
+    embedding-provider list rather than mapped to a workaround.
+51. **(Sprint 14)** Semantic search reports which mode it actually used
+    (`"semantic"` or `"keyword_fallback"`, with a stated reason) —
+    never presents keyword-matched results as if they were
+    meaning-based. Embedding generation is a separate, explicit,
+    user-triggered action, never automatic during indexing (real cost
+    on cloud providers; genuinely slow on local models).
+52. **(Sprint 14)** Code Impact Analysis's risk score is a stated,
+    simple heuristic (dependent count + weighted recorded-bug count),
+    never presented as a measured probability — no ML regression
+    predictor exists or is claimed to exist.
+53. **(Sprint 14)** Architecture Intelligence answers "why/where/what
+    breaks/who changed it" via real retrieval (graph relationships +
+    recorded memory + git history) fed to the AI Chat Panel through the
+    existing `askAboutSelection()` plumbing — never the model reasoning
+    unaided about a file it wasn't given real history for.
+54. **(Sprint 14)** AI Learning is real cross-project token-overlap
+    retrieval over recorded sprint summaries/bugs
+    (`_related_past_experience()`), injected into the Planner's prompt
+    before goal decomposition — not embedding-based (must work with no
+    provider configured) and not framed as the model having "learned".
+55. **(Sprint 14)** Automatic Documentation exports real Mermaid
+    diagram text as downloadable `.mmd` files rather than rendering
+    in-app — this app bundles no Mermaid renderer, and the text opens
+    in any standard Mermaid-capable tool.
+56. **(Sprint 14)** Embedding generation is bounded, not unbounded: file
+    candidates capped at 150 (memory/workflow candidates uncapped —
+    highest value, lowest volume), 16-text provider batches sized for a
+    local model's realistic per-request budget. A single synchronous
+    request with a generous timeout (same tier as Sprint 13's build/
+    test runners), not yet a cancellable background job.
 
 ---
 

@@ -21,6 +21,18 @@ import type {
 } from './build-runner';
 import type { SystemMetrics } from './system-metrics';
 import type { HistoryEntry, PerformanceStats, TokenStats } from './stats-client';
+import type {
+  DiagramResult,
+  EmbedResult,
+  EmbeddingProviderInfo,
+  FileContext,
+  ImpactResult,
+  KnowledgeGraph,
+  KnowledgeStats,
+  IndexResult,
+  MemoryEntry,
+  SearchResult,
+} from './knowledge-client';
 
 const backend = {
   health: (): Promise<BackendHealth> => ipcRenderer.invoke('backend:health'),
@@ -204,6 +216,41 @@ const statsApi = {
     ipcRenderer.invoke('stats:history', projectId, limit),
 };
 
+const knowledgeApi = {
+  index: (projectId: string, projectPath: string): Promise<IndexResult> =>
+    ipcRenderer.invoke('knowledge:index', projectId, projectPath),
+  getGraph: (projectId: string): Promise<KnowledgeGraph> =>
+    ipcRenderer.invoke('knowledge:get-graph', projectId),
+  getStats: (projectId: string): Promise<KnowledgeStats> =>
+    ipcRenderer.invoke('knowledge:get-stats', projectId),
+  listEmbeddingProviders: (): Promise<EmbeddingProviderInfo[]> =>
+    ipcRenderer.invoke('knowledge:list-embedding-providers'),
+  generateEmbeddings: (input: {
+    projectId: string;
+    projectPath: string;
+    provider: string;
+    model: string;
+  }): Promise<EmbedResult> => ipcRenderer.invoke('knowledge:generate-embeddings', input),
+  search: (input: {
+    projectId: string;
+    query: string;
+    provider?: string | null;
+    model?: string | null;
+  }): Promise<SearchResult> => ipcRenderer.invoke('knowledge:search', input),
+  getImpact: (projectId: string, file: string): Promise<ImpactResult> =>
+    ipcRenderer.invoke('knowledge:get-impact', projectId, file),
+  getFileContext: (projectId: string, file: string): Promise<FileContext> =>
+    ipcRenderer.invoke('knowledge:get-file-context', projectId, file),
+  getFileHistory: (projectPath: string, file: string): Promise<string> =>
+    ipcRenderer.invoke('knowledge:get-file-history', projectPath, file),
+  getDiagram: (projectId: string, type: 'dependency' | 'architecture'): Promise<DiagramResult> =>
+    ipcRenderer.invoke('knowledge:get-diagram', projectId, type),
+  listMemory: (
+    projectId: string | null,
+    type: 'project' | 'conversation' | 'long_term' | 'task' | 'knowledge',
+  ): Promise<MemoryEntry[]> => ipcRenderer.invoke('knowledge:list-memory', projectId, type),
+};
+
 const windowControls = {
   minimize: () => ipcRenderer.invoke('window:minimize'),
   maximizeToggle: () => ipcRenderer.invoke('window:maximize-toggle'),
@@ -229,4 +276,5 @@ contextBridge.exposeInMainWorld('nemi', {
   git: gitApi,
   build: buildApi,
   stats: statsApi,
+  knowledge: knowledgeApi,
 });

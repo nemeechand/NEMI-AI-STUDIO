@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -227,3 +227,154 @@ class WorkflowCreate(BaseModel):
     provider: str = Field(min_length=1)
     model: str = Field(min_length=1)
     approval_mode: ApprovalMode = "review"
+
+
+# --- Knowledge Graph / AI Memory Engine (Sprint 14) ---
+
+NodeTypeOut = Literal[
+    "project", "file", "function", "class", "agent", "workflow", "commit", "user", "requirement"
+]
+RelationshipOut = Literal[
+    "contains", "defines", "imports", "modifies", "executed_by", "authored_by", "implements",
+    "related_to",
+]
+
+
+class GraphNodeOut(BaseModel):
+    id: str
+    project_id: str | None
+    node_type: NodeTypeOut
+    label: str
+    ref_id: str | None
+    metadata: dict[str, Any] | None = None
+
+
+class GraphEdgeOut(BaseModel):
+    id: str
+    project_id: str | None
+    from_node_id: str
+    to_node_id: str
+    relationship: RelationshipOut
+
+
+class KnowledgeGraphOut(BaseModel):
+    nodes: list[GraphNodeOut]
+    edges: list[GraphEdgeOut]
+
+
+class KnowledgeStatsOut(BaseModel):
+    nodes_by_type: dict[str, int]
+    total_nodes: int
+    total_edges: int
+    files_indexed: int
+    embeddings_count: int
+
+
+class CommitIn(BaseModel):
+    hash: str = Field(min_length=1)
+    message: str = ""
+    author: str = ""
+    date: str = ""
+    files: list[str] = Field(default_factory=list)
+
+
+class KnowledgeIndexRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    project_path: str = Field(min_length=1)
+    commits: list[CommitIn] = Field(default_factory=list)
+
+
+class KnowledgeIndexResult(BaseModel):
+    files_indexed: int
+    files_removed: int
+    functions_found: int
+    classes_found: int
+    edges_created: int
+    commits_indexed: int
+    truncated: bool
+    duration_ms: int
+    errors: list[str]
+
+
+class EmbeddingProviderOut(BaseModel):
+    id: str
+    display_name: str
+    requires_api_key: bool
+    default_model: str
+
+
+class KnowledgeEmbedRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    project_path: str = Field(min_length=1)
+    provider: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    api_key: str | None = None
+
+
+class KnowledgeEmbedResult(BaseModel):
+    embedded: int
+    skipped_unchanged: int
+    failed: int
+    provider: str
+    model: str
+
+
+class KnowledgeSearchRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    query: str = Field(min_length=1, max_length=2000)
+    provider: str | None = None
+    model: str | None = None
+    api_key: str | None = None
+
+
+SearchMode = Literal["semantic", "keyword_fallback"]
+
+
+class SearchHitOut(BaseModel):
+    entity_type: str
+    entity_id: str
+    score: float
+    preview: str
+
+
+class KnowledgeSearchResult(BaseModel):
+    mode: SearchMode
+    fallback_reason: str | None = None
+    hits: list[SearchHitOut]
+
+
+class ImpactOut(BaseModel):
+    file: str
+    found: bool
+    dependents: list[str]
+    defines: list[str]
+    related_bugs: list[str]
+    risk_score: int
+    risk_label: str
+
+
+class DiagramOut(BaseModel):
+    mermaid: str
+    node_count: int
+    edge_count: int
+    truncated: bool
+
+
+class FileContextOut(BaseModel):
+    file: str
+    found_in_graph: bool
+    imported_by: list[str]
+    defines: list[str]
+    related_memory: list[dict[str, Any]]
+    risk_score: int
+    risk_label: str
+
+
+class MemoryEntryOut(BaseModel):
+    id: str
+    project_id: str | None
+    type: str
+    key: str
+    value: str
+    created_at: str
+    updated_at: str

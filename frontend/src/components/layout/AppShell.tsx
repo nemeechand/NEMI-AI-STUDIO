@@ -16,6 +16,7 @@ import { AgentsDashboard } from '../agents/AgentsDashboard';
 import { NewAgentTaskModal } from '../agents/NewAgentTaskModal';
 import { NewWorkflowModal } from '../agents/NewWorkflowModal';
 import { IntelligenceCenter } from '../intelligence/IntelligenceCenter';
+import { KnowledgePanel } from '../knowledge/KnowledgePanel';
 import { CommandPalette } from '../../commands/CommandPalette';
 import { useCommand } from '../../commands/useCommand';
 import { useWorkspace } from '../../workspace/useWorkspace';
@@ -140,6 +141,10 @@ export function AppShell() {
     setSidebarPanel('agents');
     setNewWorkflowOpen(true);
   });
+  useCommand('knowledge.showPanel', 'Knowledge: Show Panel', () => {
+    setSidebarVisible(true);
+    setSidebarPanel('knowledge');
+  });
   useCommand(
     'view.toggleIntelligenceCenter',
     'View: Toggle Live Dashboard (Intelligence Center)',
@@ -172,6 +177,8 @@ export function AppShell() {
             <WorkspaceManager onNewProject={() => setNewProjectOpen(true)} />
           ) : sidebarPanel === 'search' ? (
             <GlobalSearch />
+          ) : sidebarPanel === 'knowledge' ? (
+            <KnowledgePanel />
           ) : (
             <AgentsDashboard
               onNewTask={() => setNewAgentTaskOpen(true)}

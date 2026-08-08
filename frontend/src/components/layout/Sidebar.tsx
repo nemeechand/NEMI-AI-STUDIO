@@ -1,7 +1,7 @@
-import { Bot, FolderKanban, FolderTree, Search, Settings } from 'lucide-react';
+import { Bot, BrainCircuit, FolderKanban, FolderTree, Search, Settings } from 'lucide-react';
 import { IconButton } from '../common/IconButton';
 
-export type SidebarPanel = 'explorer' | 'workspace' | 'search' | 'agents';
+export type SidebarPanel = 'explorer' | 'workspace' | 'search' | 'agents' | 'knowledge';
 
 interface SidebarProps {
   activePanel: SidebarPanel;
@@ -40,6 +40,13 @@ export function Sidebar({ activePanel, onSelectPanel, onOpenSettings }: SidebarP
           onClick={() => onSelectPanel('agents')}
         >
           <Bot size={18} />
+        </IconButton>
+        <IconButton
+          label="Knowledge"
+          active={activePanel === 'knowledge'}
+          onClick={() => onSelectPanel('knowledge')}
+        >
+          <BrainCircuit size={18} />
         </IconButton>
       </div>
       <IconButton label="Settings" onClick={onOpenSettings}>

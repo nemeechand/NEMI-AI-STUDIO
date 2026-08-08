@@ -3,6 +3,7 @@ import { ProjectProvider } from './project/ProjectProvider';
 import { WorkspaceProvider } from './workspace/WorkspaceProvider';
 import { AiProvider } from './ai/AiProvider';
 import { AgentsProvider } from './agents/AgentsProvider';
+import { WorkflowsProvider } from './workflows/WorkflowsProvider';
 import { AppShell } from './components/layout/AppShell';
 
 function App() {
@@ -12,7 +13,9 @@ function App() {
         <WorkspaceProvider>
           <AiProvider>
             <AgentsProvider>
-              <AppShell />
+              <WorkflowsProvider>
+                <AppShell />
+              </WorkflowsProvider>
             </AgentsProvider>
           </AiProvider>
         </WorkspaceProvider>

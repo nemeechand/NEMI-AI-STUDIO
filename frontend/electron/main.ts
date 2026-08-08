@@ -1,7 +1,12 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getBackendHealth, startBackend, stopBackend } from './backend-process';
+import {
+  getBackendHealth,
+  getBackendResourceUsage,
+  startBackend,
+  stopBackend,
+} from './backend-process';
 import {
   fetchRecentLogs,
   fetchRecentProjects,
@@ -38,15 +43,26 @@ import {
   type AiContextRefInput,
 } from './ai-client';
 import {
+  approveAgentTask,
   cancelAgentTask,
   createAgentPipeline,
   getAgentTask,
   listAgentTasks,
   listAgents,
+  markAgentTaskFilesApplied,
   retryAgentTask,
   runAgentCycle,
   type AgentRoleKey,
 } from './agent-client';
+import {
+  cancelWorkflow,
+  createWorkflow,
+  getWorkflow,
+  listWorkflows,
+  pauseWorkflow,
+  resumeWorkflow,
+  type ApprovalMode,
+} from './workflow-client';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -231,6 +247,32 @@ ipcMain.handle(
 );
 ipcMain.handle('agents:cancel-task', (_event, taskId: string) => cancelAgentTask(taskId));
 ipcMain.handle('agents:retry-task', (_event, taskId: string) => retryAgentTask(taskId));
+ipcMain.handle('agents:approve-task', (_event, taskId: string) => approveAgentTask(taskId));
+ipcMain.handle('agents:mark-files-applied', (_event, taskId: string) =>
+  markAgentTaskFilesApplied(taskId),
+);
+
+ipcMain.handle('workflows:list', (_event, projectId: string | null) => listWorkflows(projectId));
+ipcMain.handle('workflows:get', (_event, workflowId: string) => getWorkflow(workflowId));
+ipcMain.handle(
+  'workflows:create',
+  (
+    _event,
+    input: {
+      projectId: string | null;
+      title: string;
+      goal: string;
+      provider: string;
+      model: string;
+      approvalMode: ApprovalMode;
+    },
+  ) => createWorkflow(input),
+);
+ipcMain.handle('workflows:pause', (_event, workflowId: string) => pauseWorkflow(workflowId));
+ipcMain.handle('workflows:resume', (_event, workflowId: string) => resumeWorkflow(workflowId));
+ipcMain.handle('workflows:cancel', (_event, workflowId: string) => cancelWorkflow(workflowId));
+
+ipcMain.handle('system:resource-usage', () => getBackendResourceUsage());
 
 const AGENT_RUN_CYCLE_INTERVAL_MS = 4_000;
 const AGENT_CYCLE_PROVIDERS: ProviderId[] = ['openai', 'anthropic', 'gemini'];

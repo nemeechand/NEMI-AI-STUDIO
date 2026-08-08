@@ -12,10 +12,12 @@ from app.api.ai import router as ai_router
 from app.api.health import router as health_router
 from app.api.logs import router as logs_router
 from app.api.projects import router as projects_router
+from app.api.workflows import router as workflows_router
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.db.connection import get_connection
+from app.db.repositories.agent_tasks_repository import AgentTasksRepository
 from app.db.repositories.agents_repository import AgentsRepository
 from app.db.repositories.logs_repository import LogsRepository
 from app.db.schema import init_db
@@ -30,6 +32,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     with get_connection(settings) as connection:
         init_db(connection)
         AgentsRepository(connection).seed_from_role_files(settings.agents_dir)
+        # Sprint 12's "Auto Resume after restart": any task still marked
+        # 'running' can only be a leftover from a previous process that
+        # died mid-execution — there's no live call to finish it.
+        requeued = AgentTasksRepository(connection).requeue_orphaned_running_tasks()
+        if requeued:
+            logger.info("Requeued %d orphaned running agent task(s) on startup", len(requeued))
         LogsRepository(connection).insert(
             level="INFO",
             source="backend.startup",
@@ -48,6 +56,7 @@ def create_app() -> FastAPI:
     app.include_router(projects_router)
     app.include_router(ai_router)
     app.include_router(agents_router)
+    app.include_router(workflows_router)
     register_exception_handlers(app)
     return app
 

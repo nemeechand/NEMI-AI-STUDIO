@@ -143,10 +143,59 @@ declare global {
     result_summary: string | null;
     proposed_files: ProposedFile[] | null;
     error_message: string | null;
+    workflow_id: string | null;
+    milestone_id: string | null;
+    requires_approval: boolean;
+    approved_at: string | null;
+    proposed_files_applied: boolean;
+    conflict_warning: string | null;
     created_at: string;
     updated_at: string;
     started_at: string | null;
     completed_at: string | null;
+  }
+
+  type WorkflowStatus =
+    'planning' | 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+  type ApprovalMode = 'auto' | 'review' | 'manual';
+  type MilestoneStatus = 'pending' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+  interface Milestone {
+    id: string;
+    workflow_id: string;
+    title: string;
+    description: string;
+    order_index: number;
+    status: MilestoneStatus;
+    created_at: string;
+    updated_at: string;
+  }
+
+  interface Workflow {
+    id: string;
+    project_id: string | null;
+    title: string;
+    goal: string;
+    status: WorkflowStatus;
+    approval_mode: ApprovalMode;
+    provider: string;
+    model: string;
+    conversation_id: string | null;
+    error_message: string | null;
+    created_at: string;
+    updated_at: string;
+    started_at: string | null;
+    completed_at: string | null;
+  }
+
+  interface WorkflowDetail extends Workflow {
+    milestones: Milestone[];
+    tasks: AgentTask[];
+  }
+
+  interface ResourceUsage {
+    memoryMb: number;
+    cpuPercent: number | null;
   }
 
   interface Window {
@@ -231,7 +280,27 @@ declare global {
         }) => Promise<AgentTask[]>;
         cancelTask: (taskId: string) => Promise<void>;
         retryTask: (taskId: string) => Promise<AgentTask>;
+        approveTask: (taskId: string) => Promise<AgentTask>;
+        markFilesApplied: (taskId: string) => Promise<AgentTask>;
         onTasksChanged: (callback: () => void) => () => void;
+      };
+      workflows: {
+        list: (projectId: string | null) => Promise<Workflow[]>;
+        get: (workflowId: string) => Promise<WorkflowDetail>;
+        create: (input: {
+          projectId: string | null;
+          title: string;
+          goal: string;
+          provider: string;
+          model: string;
+          approvalMode: ApprovalMode;
+        }) => Promise<Workflow>;
+        pause: (workflowId: string) => Promise<Workflow>;
+        resume: (workflowId: string) => Promise<Workflow>;
+        cancel: (workflowId: string) => Promise<Workflow>;
+      };
+      system: {
+        getResourceUsage: () => Promise<ResourceUsage | null>;
       };
     };
   }

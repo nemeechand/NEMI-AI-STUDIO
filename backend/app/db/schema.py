@@ -166,6 +166,53 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_agent_tasks_project_id ON agent_tasks(project_id)",
     "CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status)",
     "CREATE INDEX IF NOT EXISTS idx_agent_tasks_depends_on ON agent_tasks(depends_on_task_id)",
+    # Sprint 12: the AI Project Manager turns one high-level user goal into
+    # an ordered list of milestones, each of which becomes its own
+    # planner/developer/reviewer/tester pipeline (see agent_tasks.workflow_id/
+    # milestone_id below) — a workflow is the durable record of that goal
+    # and its overall run state (including pause/resume, which the workflow
+    # engine implements by filtering agent_tasks.list_runnable() rather than
+    # touching agent_tasks.status, so no CHECK-constraint migration is
+    # needed on the table that already shipped in Sprint 11).
+    """
+    CREATE TABLE IF NOT EXISTS workflows (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id),
+        title TEXT NOT NULL,
+        goal TEXT NOT NULL,
+        status TEXT NOT NULL
+            CHECK (status IN
+                ('planning', 'queued', 'running', 'paused', 'completed', 'failed', 'cancelled'))
+            DEFAULT 'planning',
+        approval_mode TEXT NOT NULL
+            CHECK (approval_mode IN ('auto', 'review', 'manual'))
+            DEFAULT 'review',
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        conversation_id TEXT REFERENCES ai_conversations(id),
+        error_message TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_workflows_project_id ON workflows(project_id)",
+    """
+    CREATE TABLE IF NOT EXISTS milestones (
+        id TEXT PRIMARY KEY,
+        workflow_id TEXT NOT NULL REFERENCES workflows(id),
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        order_index INTEGER NOT NULL,
+        status TEXT NOT NULL
+            CHECK (status IN ('pending', 'queued', 'running', 'completed', 'failed', 'cancelled'))
+            DEFAULT 'pending',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_milestones_workflow_id ON milestones(workflow_id)",
 )
 
 
@@ -193,4 +240,18 @@ def init_db(connection: sqlite3.Connection) -> None:
     # chat, to the specific task it's doing the work for (task_id).
     _add_column_if_missing(connection, "ai_conversations", "agent_id", "TEXT")
     _add_column_if_missing(connection, "ai_conversations", "task_id", "TEXT")
+    # Sprint 12: all additive/nullable-or-defaulted, deliberately avoiding
+    # any change to agent_tasks' existing `status` CHECK constraint, which
+    # SQLite can't alter in place on a table created under the old
+    # definition — see the workflows table comment above.
+    _add_column_if_missing(connection, "agent_tasks", "workflow_id", "TEXT")
+    _add_column_if_missing(connection, "agent_tasks", "milestone_id", "TEXT")
+    _add_column_if_missing(
+        connection, "agent_tasks", "requires_approval", "INTEGER NOT NULL DEFAULT 0"
+    )
+    _add_column_if_missing(connection, "agent_tasks", "approved_at", "TEXT")
+    _add_column_if_missing(
+        connection, "agent_tasks", "proposed_files_applied", "INTEGER NOT NULL DEFAULT 0"
+    )
+    _add_column_if_missing(connection, "agent_tasks", "conflict_warning", "TEXT")
     connection.commit()

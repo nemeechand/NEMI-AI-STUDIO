@@ -414,6 +414,28 @@ Verified: tsc build, eslint (0 warnings), prettier (clean), vite build; pytest (
 
 Known limitation: the tiny `qwen2.5:0.5b` Ollama model used for live testing does not reliably follow the exact ` ```file:path``` ` instruction format for Developer-stage proposed files (it produces plain code blocks instead) — this is a small-model instruction-following limitation, not a parser defect (`_extract_proposed_files()` was separately verified correct against a compliant string via a direct unit test), so the Apply-button flow is verified by parser unit test and UI wiring, not by an end-to-end proposed-file live capture in this environment. Only the four orchestrated roles (planner/developer/reviewer/tester) are scheduled — the remaining `agents/*.md` roles stay reference documents. A task's dependency is a single link, not a graph (linear chains only, no fan-out/fan-in). Code-signing certificate for the installer remains the top Beta blocker, unaffected by this sprint.
 
+Sprint 12 — Completed (Workflow Engine & AI Project Manager)
+
+Goal:
+
+Build an Autonomous AI Project Manager and Workflow Engine on top of Sprint 11's Agent Orchestration Framework: accept a high-level goal, break it into milestones, create sprint tasks automatically, and run them through the existing Planner/Developer/Reviewer/Tester pipeline — with a task dependency chain, automatic scheduling, pause/resume/cancel, auto-resume after restart, a Sprint Progress Center (percentage, live task list, current agent, ETA, logs, counters, resource usage), shared-memory agent collaboration with conflict detection, and a configurable Human Approval Mode (Fully Automatic / Review Before Apply / Manual Approval) — integrated with the existing AI Chat Panel, Monaco Editor, Workspace Manager, Explorer, Project Manager, Backend, and AI Providers, without breaking Sprints 1–11.
+
+Delivered:
+
+Backend: the AI Project Manager reuses the existing Planner role rather than adding a new agent persona — `POST /workflows` creates a `workflows` row (`status='planning'`) plus a single goal-decomposition `agent_tasks` row (Planner role, no milestone yet), which `run_cycle()` executes exactly like any other task (no synchronous API call, no second execution path). New `backend/app/ai/orchestration/project_manager.py`: `parse_milestones()` parses the AI's `### MILESTONE: <title>` output (mirroring `_extract_proposed_files()`'s regex convention); `create_milestone_pipelines()` turns each parsed milestone into its own `milestones` row plus a full planner/developer/reviewer/tester pipeline, chained into one linear sequence across the whole workflow (each milestone's first stage depends on the previous milestone's last stage) — a deliberate single-link chain, not a multi-parent dependency graph. New `workflows`/`milestones` tables (see docs/DATABASE_SCHEMA.md); `agent_tasks` gained six additive columns (`workflow_id`, `milestone_id`, `requires_approval`, `approved_at`, `proposed_files_applied`, `conflict_warning`) without touching its existing `status` CHECK constraint. Workflow Pause/Resume is implemented entirely by filtering `list_runnable()` against the parent workflow's status — zero changes to a task's own status, so Resume picks back up exactly where it left off. Human Approval Mode's "Manual" tier gates on `requires_approval`/`approved_at` rather than a new status value (avoiding a CHECK-constraint table rebuild). `_sync_workflow_progress()` re-derives milestone/workflow status from real task states after every transition, leaving an already-terminal workflow alone. `_detect_conflicts()` flags overlapping Developer-proposed file paths across tasks in the same workflow. `AgentTasksRepository.requeue_orphaned_running_tasks()`, called once at backend startup, implements "Auto Resume after restart" — any task still `'running'` can only be a crash leftover.
+
+Electron: new `workflow-client.ts` mirrors `agent-client.ts`'s pattern for the `window.nemi.workflows.*` IPC surface; `agents:*` gained `approveTask`/`markFilesApplied`. New `getBackendResourceUsage()` in `backend-process.ts` reports the real backend child process's memory (`Get-Process`, exact) and CPU (diffed `TotalProcessorTime` between two samples, labeled approximate) — Windows-specific, matching this app's only packaged target, returns `null` elsewhere.
+
+Frontend: new `workflows/` Context+Provider+Hook module (`WorkflowsProvider.tsx`) — also where Fully Automatic mode's auto-apply lives (the backend can't write files per Sprint 5, and Electron main doesn't reliably know the current project, but the renderer does): it scans active `'auto'`-mode workflows' completed Developer tasks for unapplied proposed files, writes them via the existing `fs.writeFile()` path, then calls the new mark-files-applied endpoint. New `components/agents/` additions: a Goals tab alongside the existing Tasks tab in the Agents Dashboard, `NewWorkflowModal.tsx` (goal/title/provider/model/approval-mode), `WorkflowsList.tsx`, and `SprintProgressCenter.tsx` (percentage bar, completed/running/queued/failed counters, current executing agent, ETA estimate, milestone breakdown with per-task Approve buttons, recent backend activity tail, resource usage, Pause/Resume/Cancel).
+
+Found and fixed one real bug during live UI verification: the Pause button was conditioned on `status === 'queued' || 'running'`, so it never appeared while a workflow was still `'planning'` (its goal-decomposition task not yet finished) even though the backend already allowed pausing from that state — fixed by including `'planning'` in the button's visibility condition, confirmed via a follow-up live run showing Pause/Resume correctly toggling and the Running counter staying accurate for an in-flight task after pausing.
+
+docs/ARCHITECTURE.md gained a new "WORKFLOW ENGINE & AI PROJECT MANAGER (locked — Sprint 12)" section, the IPC namespace list updated to eight namespaces, seven new locked-decision entries; docs/DATABASE_SCHEMA.md updated with the new `workflows`/`milestones` tables and `agent_tasks`'s six new columns; docs/SPRINT_12_REPORT.md created.
+
+Verified: tsc build, eslint (0 warnings), prettier (clean), vite build; pytest (72 passed, 19 new — including a live end-to-end goal-decomposition test against the real local Ollama model, skipped gracefully if Ollama isn't present rather than mocked), ruff check (all checks passed), mypy strict (0 issues, 42 source files). Live Playwright verification (real Ollama, no mocks) across multiple runs: manual-approval gating confirmed (task stays queued until explicitly approved, then a real decomposition call ran and — on one run — produced real, correctly-parsed milestones with a pipeline that started executing); pausing immediately after creation (while still `'planning'`) correctly blocks the decomposition task from ever being picked up, resume correctly releases it; cancel correctly cascades to a queued decomposition task; a workflow created through the real New Goal UI form rendered correctly in the Sprint Progress Center (percentage, counters, ETA, approval mode, Recent backend activity) and responded correctly to a real Pause button click (Paused status, Resume button appears, Running counter still reflects the in-flight task). A concurrent run's decomposition task was observed genuinely picked up and executing for an extended period without completing — diagnosed as Ollama itself serializing multiple simultaneous real model calls from several workflows created in quick succession during testing, not an orchestration defect (the scheduling/execution mechanism was independently confirmed correct in the same and other runs).
+
+Known limitation: as in Sprint 11, the tiny local test model's instruction-following for structured output formats (here, `### MILESTONE:` sections) is not fully reliable — an empty parse fails the workflow with a visible error rather than hanging silently, and this exact path is unit-tested; a full live happy-path run (real milestones parsed, pipeline created and started) was also observed directly in this sprint's testing, not only the graceful-failure path. Conflict detection is verified directly (two tasks seeded with an overlapping proposed path) rather than by forcing two live models to collide, which isn't reliably reproducible on demand. Milestone/pipeline chains are linear (one dependency link per task), not a true multi-parent DAG — deliberately out of scope, consistent with Sprint 11's original scoping of `depends_on_task_id`. Resource usage reporting is Windows-only. Code-signing certificate for the installer remains the top Beta blocker, unaffected by this sprint.
+
 ---
 
 # CURRENT STATUS
@@ -606,15 +628,25 @@ Sprint 1 Completed
 
 ✔ Sprint 11 Verified (tsc, eslint, prettier, vite build; pytest ×53 [16 new, incl. a live two-stage Ollama pipeline test], ruff, mypy strict; live Playwright verification — full pipeline incl. retry/cascade/parallel-execution/real UI form interaction, plus a full Sprint 1–10 regression pass — reproduced clean)
 
+✔ Sprint 12 Completed — Workflow Engine & AI Project Manager
+
+✔ AI Project Manager Implemented — a high-level goal is decomposed into an ordered list of milestones (reusing the existing Planner role, run through the same `run_cycle()` every task uses), each becoming its own full Planner/Developer/Reviewer/Tester pipeline, chained sequentially across the whole workflow
+
+✔ Workflow Engine Implemented — new `workflows`/`milestones` tables, Pause/Resume (implemented by filtering the scheduler, not touching task status), Cancel (cascades to queued tasks), Auto Resume after restart (requeues any task orphaned `'running'` at startup), a Sprint Progress Center (percentage, counters, current agent, ETA, logs, resource usage), and a configurable Human Approval Mode (Fully Automatic / Review Before Apply / Manual Approval)
+
+✔ Found and Fixed One Real Bug During Live UI Verification — the Pause button didn't appear while a workflow was still `'planning'`, even though pausing was already supported from that state; fixed by correcting the button's visibility condition
+
+✔ Sprint 12 Verified (tsc, eslint, prettier, vite build; pytest ×72 [19 new, incl. a live goal-decomposition Ollama test], ruff, mypy strict; live Playwright verification across multiple runs — manual approval gating, pause-from-planning, resume, cancel cascade, real UI goal creation and Pause click, a full real milestone-decomposition-to-execution happy path observed directly — reproduced clean)
+
 ---
 
 # PENDING TASKS
 
-Code-signing certificate for the installer (currently unsigned) — top remaining Beta blocker, unaffected by Sprint 11
+Code-signing certificate for the installer (currently unsigned) — top remaining Beta blocker, unaffected by Sprint 12
 
 Workflow Design
 
-Memory Engine (the schema-generic `long_term`/`knowledge`/`project`/`conversation` memory types remain unused — only `type='task'` has a real consumer, added this sprint)
+Memory Engine (the schema-generic `long_term`/`knowledge`/`project`/`conversation` memory types remain unused — only `type='task'` has a real consumer, added in Sprint 11)
 
 Plugin System
 
@@ -624,13 +656,17 @@ Testing Engine
 
 Build System
 
-Repositories/business logic for the remaining 2 tables (`tasks`, `settings`) plus the still-generic `history` audit table — schema exists, repositories deferred to the sprints that need them; `projects` (Sprint 7), `ai_conversations`/`ai_messages` (Sprint 10), and `agents`/`agent_tasks`/`memory` (Sprint 11) now have repositories; `files` table remains intentionally unused (file content always comes from disk)
+Repositories/business logic for the remaining 2 tables (`tasks`, `settings`) plus the still-generic `history` audit table — schema exists, repositories deferred to the sprints that need them; `projects` (Sprint 7), `ai_conversations`/`ai_messages` (Sprint 10), `agents`/`agent_tasks`/`memory` (Sprint 11), and `workflows`/`milestones` (Sprint 12) now have repositories; `files` table remains intentionally unused (file content always comes from disk)
 
 Resizable/drag panel splitters (sidebar and logger panel are currently show/hide toggles only)
 
-Proposed-file Apply flow has parser-unit-test + UI-wiring coverage but not an end-to-end live capture in this environment — the small local Ollama model used for testing doesn't reliably follow the exact ` ```file:path``` ` instruction format (a model instruction-following limitation, not a parser defect)
+Proposed-file Apply flow (manual and Fully-Automatic) has parser-unit-test + UI-wiring coverage but not an end-to-end live capture in this environment — the small local Ollama model used for testing doesn't reliably follow the exact ` ```file:path``` ` instruction format (a model instruction-following limitation, not a parser defect)
 
 Only four of the eight `agents/*.md` roles (planner/developer/reviewer/tester) are scheduled; the rest remain reference documents, not wired into the automated queue
+
+Milestone/pipeline dependency chains are linear (one link per task), not a true multi-parent dependency graph — deliberately out of scope since Sprint 11
+
+Resource usage reporting (Sprint 12) is Windows-only, matching this app's only packaged target
 
 ---
 
@@ -796,17 +832,19 @@ Sprint 10 Completed — AI Chat & Agent Framework: implements the AI layer reser
 
 Sprint 11 Completed — Agent Orchestration Framework: builds the first production-ready multi-agent pipeline on Sprint 10's provider/context foundation — Planner/Developer/Reviewer/Tester chained via a dependency-gated Agent Task Queue (`agent_tasks`), a stateless externally-triggered Agent Manager (`run_cycle()`, no server-side API keys, no internal loop — Electron polls every 4s), parallel execution of independent tasks (bounded), automatic retries with cascade-cancellation of dependents on permanent failure, agent-to-agent communication via the `memory` table's first real implementation, human-gated Developer-stage file proposals (parsed, never auto-applied), and an Agents Dashboard sidebar panel with a New Task modal; found and fixed one real bug during live verification (backend health state latching permanently into "error" after a startup timeout even when the backend later recovered — fixed with a background late-recovery watcher) — verified via live Playwright pipeline testing (retry/cascade/parallel execution/real UI interaction) plus a full Sprint 1–10 regression pass and the full offline suite, each reproduced clean; resolves the agent orchestration work Sprint 10 explicitly deferred
 
+Sprint 12 Completed — Workflow Engine & AI Project Manager: builds an autonomous AI Project Manager on Sprint 11's Agent Orchestration Framework — a high-level goal is decomposed (reusing the existing Planner role, run through the same `run_cycle()`, not a new execution path) into an ordered list of milestones, each its own full Planner/Developer/Reviewer/Tester pipeline chained sequentially across the workflow; new `workflows`/`milestones` tables and six additive `agent_tasks` columns (none touching the existing `status` CHECK constraint); Pause/Resume implemented by filtering the scheduler rather than touching task status; Human Approval Mode (Fully Automatic/Review Before Apply/Manual Approval) gates on new `requires_approval`/`approved_at` columns; Auto Resume after restart requeues any task orphaned `'running'` at startup; a Sprint Progress Center (percentage, counters, current agent, ETA, logs, real Windows backend resource usage); conflict detection flags overlapping Developer-proposed file paths across a workflow; found and fixed one real bug during live UI verification (the Pause button didn't appear while a workflow was still `'planning'`, even though pausing was already supported from that state) — verified via live Playwright testing across multiple runs including a full real goal-decomposition-to-milestone-execution happy path, plus the full offline suite; resolves the autonomous project management work Sprint 11 explicitly deferred
+
 ---
 
 # NEXT MILESTONE
 
-Sprint 12
+Sprint 13
 
-Code-signing certificate for the installer — still the top remaining Beta blocker, unaffected by Sprint 11
+Code-signing certificate for the installer — still the top remaining Beta blocker, unaffected by Sprint 12
 
 True concurrent multi-project support (simultaneous open projects, not just switching) — deliberately deferred in Sprint 7; would require a per-project filesystem watcher map and a multi-root Explorer UI
 
-Wiring the remaining four `agents/*.md` roles (architect, debugger, etc.) into the orchestration queue, and/or a richer dependency model beyond a single linear chain per pipeline — Sprint 11 deliberately scoped to the four core roles and linear chains only
+Wiring the remaining four `agents/*.md` roles (architect, debugger, etc.) into the orchestration queue, and/or a richer dependency model beyond a single linear chain per pipeline — Sprint 11/12 deliberately scoped to the four core roles and linear chains only
 
 ---
 

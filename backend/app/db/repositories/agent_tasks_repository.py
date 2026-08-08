@@ -32,6 +32,9 @@ class AgentTasksRepository:
         provider: str,
         model: str,
         max_retries: int = 2,
+        workflow_id: str | None = None,
+        milestone_id: str | None = None,
+        requires_approval: bool = False,
     ) -> dict[str, Any]:
         task_id = str(uuid4())
         now = datetime.now(UTC).isoformat()
@@ -40,8 +43,8 @@ class AgentTasksRepository:
             INSERT INTO agent_tasks
                 (id, project_id, title, description, agent_role, status, priority,
                  depends_on_task_id, provider, model, retry_count, max_retries,
-                 created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, 0, ?, ?, ?)
+                 workflow_id, milestone_id, requires_approval, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -54,6 +57,9 @@ class AgentTasksRepository:
                 provider,
                 model,
                 max_retries,
+                workflow_id,
+                milestone_id,
+                1 if requires_approval else 0,
                 now,
                 now,
             ),
@@ -81,10 +87,26 @@ class AgentTasksRepository:
     def list_runnable(self) -> list[dict[str, Any]]:
         """Queued tasks whose dependency (if any) has already completed —
         what the scheduler is allowed to start next, across every
-        project (the background loop runs globally, not per-project)."""
+        project (the background loop runs globally, not per-project).
+
+        Two additional gates, both Sprint 12 additions: a task belonging
+        to a workflow that isn't actively runnable (paused, or already in
+        a terminal state) is never runnable — this is how workflow
+        Pause/Cancel is implemented, with no change to the task's own
+        `status`, so a resumed workflow's tasks pick back up exactly
+        where they were — and a task with `requires_approval` set is only
+        runnable once a human has explicitly approved it (Manual Approval
+        mode)."""
         queued = self._connection.execute(
-            "SELECT * FROM agent_tasks WHERE status = 'queued' "
-            "ORDER BY priority ASC, created_at ASC"
+            """
+            SELECT agent_tasks.* FROM agent_tasks
+            LEFT JOIN workflows ON workflows.id = agent_tasks.workflow_id
+            WHERE agent_tasks.status = 'queued'
+              AND (workflows.status IS NULL
+                   OR workflows.status IN ('planning', 'queued', 'running'))
+              AND (agent_tasks.requires_approval = 0 OR agent_tasks.approved_at IS NOT NULL)
+            ORDER BY agent_tasks.priority ASC, agent_tasks.created_at ASC
+            """
         ).fetchall()
         runnable: list[dict[str, Any]] = []
         for row in queued:
@@ -97,6 +119,62 @@ class AgentTasksRepository:
             if dep is not None and dep["status"] == "completed":
                 runnable.append(task)
         return runnable
+
+    def list_for_workflow(self, workflow_id: str) -> list[dict[str, Any]]:
+        rows = self._connection.execute(
+            "SELECT * FROM agent_tasks WHERE workflow_id = ? ORDER BY created_at ASC",
+            (workflow_id,),
+        ).fetchall()
+        return [_row_to_dict(row) for row in rows]
+
+    def approve(self, task_id: str) -> bool:
+        now = datetime.now(UTC).isoformat()
+        cursor = self._connection.execute(
+            """
+            UPDATE agent_tasks SET approved_at = ?, updated_at = ?
+            WHERE id = ? AND requires_approval = 1 AND approved_at IS NULL
+            """,
+            (now, now, task_id),
+        )
+        self._connection.commit()
+        return cursor.rowcount > 0
+
+    def mark_files_applied(self, task_id: str) -> bool:
+        now = datetime.now(UTC).isoformat()
+        cursor = self._connection.execute(
+            "UPDATE agent_tasks SET proposed_files_applied = 1, updated_at = ? WHERE id = ?",
+            (now, task_id),
+        )
+        self._connection.commit()
+        return cursor.rowcount > 0
+
+    def set_conflict_warning(self, task_id: str, message: str) -> None:
+        self._connection.execute(
+            "UPDATE agent_tasks SET conflict_warning = ?, updated_at = ? WHERE id = ?",
+            (message, datetime.now(UTC).isoformat(), task_id),
+        )
+        self._connection.commit()
+
+    def requeue_orphaned_running_tasks(self) -> list[str]:
+        """Sprint 12's "Auto Resume after restart": a task left in
+        `status = 'running'` can only mean the previous process died
+        mid-execution (a clean run always transitions it onward via
+        `mark_completed`/`mark_failed_or_retry`) — there is no live call
+        in flight to finish it. Called once at backend startup so those
+        tasks re-enter the queue instead of sitting stuck forever."""
+        now = datetime.now(UTC).isoformat()
+        rows = self._connection.execute(
+            "SELECT id FROM agent_tasks WHERE status = 'running'"
+        ).fetchall()
+        ids = [row["id"] for row in rows]
+        if ids:
+            self._connection.executemany(
+                "UPDATE agent_tasks SET status = 'queued', started_at = NULL, updated_at = ? "
+                "WHERE id = ?",
+                [(now, task_id) for task_id in ids],
+            )
+            self._connection.commit()
+        return ids
 
     def mark_running(self, task_id: str) -> None:
         now = datetime.now(UTC).isoformat()

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { BackendHealth } from './backend-process';
+import type { BackendHealth, ResourceUsage } from './backend-process';
 import type { LogEntry, ProjectRecord } from './backend-client';
 import type { ExplorerEntry, SearchMatch, SearchOptions } from './filesystem';
 import type { ProviderId } from './ai-credentials';
@@ -11,6 +11,7 @@ import type {
   StreamEventPayload,
 } from './ai-client';
 import type { AgentInfo, AgentRoleKey, AgentTask } from './agent-client';
+import type { ApprovalMode, Workflow, WorkflowDetail } from './workflow-client';
 
 const backend = {
   health: (): Promise<BackendHealth> => ipcRenderer.invoke('backend:health'),
@@ -121,11 +122,41 @@ const agentsApi = {
   cancelTask: (taskId: string): Promise<void> => ipcRenderer.invoke('agents:cancel-task', taskId),
   retryTask: (taskId: string): Promise<AgentTask> =>
     ipcRenderer.invoke('agents:retry-task', taskId),
+  approveTask: (taskId: string): Promise<AgentTask> =>
+    ipcRenderer.invoke('agents:approve-task', taskId),
+  markFilesApplied: (taskId: string): Promise<AgentTask> =>
+    ipcRenderer.invoke('agents:mark-files-applied', taskId),
   onTasksChanged: (callback: () => void) => {
     const listener = () => callback();
     ipcRenderer.on('agents:tasks-changed', listener);
     return () => ipcRenderer.removeListener('agents:tasks-changed', listener);
   },
+};
+
+const workflowsApi = {
+  list: (projectId: string | null): Promise<Workflow[]> =>
+    ipcRenderer.invoke('workflows:list', projectId),
+  get: (workflowId: string): Promise<WorkflowDetail> =>
+    ipcRenderer.invoke('workflows:get', workflowId),
+  create: (input: {
+    projectId: string | null;
+    title: string;
+    goal: string;
+    provider: string;
+    model: string;
+    approvalMode: ApprovalMode;
+  }): Promise<Workflow> => ipcRenderer.invoke('workflows:create', input),
+  pause: (workflowId: string): Promise<Workflow> =>
+    ipcRenderer.invoke('workflows:pause', workflowId),
+  resume: (workflowId: string): Promise<Workflow> =>
+    ipcRenderer.invoke('workflows:resume', workflowId),
+  cancel: (workflowId: string): Promise<Workflow> =>
+    ipcRenderer.invoke('workflows:cancel', workflowId),
+};
+
+const systemApi = {
+  getResourceUsage: (): Promise<ResourceUsage | null> =>
+    ipcRenderer.invoke('system:resource-usage'),
 };
 
 const windowControls = {
@@ -148,4 +179,6 @@ contextBridge.exposeInMainWorld('nemi', {
   projects,
   ai: aiApi,
   agents: agentsApi,
+  workflows: workflowsApi,
+  system: systemApi,
 });

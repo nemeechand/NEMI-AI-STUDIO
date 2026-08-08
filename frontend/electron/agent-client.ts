@@ -51,6 +51,12 @@ export interface AgentTask {
   result_summary: string | null;
   proposed_files: ProposedFile[] | null;
   error_message: string | null;
+  workflow_id: string | null;
+  milestone_id: string | null;
+  requires_approval: boolean;
+  approved_at: string | null;
+  proposed_files_applied: boolean;
+  conflict_warning: string | null;
   created_at: string;
   updated_at: string;
   started_at: string | null;
@@ -100,6 +106,16 @@ export function cancelAgentTask(taskId: string): Promise<void> {
 
 export function retryAgentTask(taskId: string): Promise<AgentTask> {
   return requestJson(`/agents/tasks/${encodeURIComponent(taskId)}/retry`, { method: 'POST' });
+}
+
+export function approveAgentTask(taskId: string): Promise<AgentTask> {
+  return requestJson(`/agents/tasks/${encodeURIComponent(taskId)}/approve`, { method: 'POST' });
+}
+
+export function markAgentTaskFilesApplied(taskId: string): Promise<AgentTask> {
+  return requestJson(`/agents/tasks/${encodeURIComponent(taskId)}/mark-files-applied`, {
+    method: 'POST',
+  });
 }
 
 export function runAgentCycle(apiKeys: Record<string, string>): Promise<{ started: number }> {

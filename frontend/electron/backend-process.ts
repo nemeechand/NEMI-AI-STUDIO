@@ -1,5 +1,6 @@
 import { app } from 'electron';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { promisify } from 'node:util';
 import path from 'node:path';
 import {
   BACKEND_HOST,
@@ -244,4 +245,71 @@ export function getBackendHealth(): BackendHealth {
     version: lastHealth?.version,
     uptimeSeconds: lastHealth?.uptime_seconds,
   };
+}
+
+export interface ResourceUsage {
+  memoryMb: number;
+  /** Approximate — sampled as (Δcpu-seconds / Δwall-seconds) between two
+   * calls to this function, not read from a true OS scheduler counter.
+   * `null` on the very first call of a session (no prior sample to diff
+   * against) and whenever the process can't be inspected. */
+  cpuPercent: number | null;
+}
+
+const execFileAsync = promisify(execFile);
+
+let lastCpuSample: { atMs: number; cpuSeconds: number } | null = null;
+
+/**
+ * The Python backend is a plain `child_process.spawn()`, not one of
+ * Electron's own tracked subprocesses — `app.getAppMetrics()` only covers
+ * the renderer/GPU/utility processes Electron itself launched, so it can't
+ * report on this one. `Get-Process` is the pragmatic, honest way to get
+ * real numbers for an arbitrary PID on Windows (this app's only packaged
+ * target — see package.json's `build.win`) without a native addon. CPU is
+ * `Get-Process`'s cumulative processor time, turned into a percentage by
+ * diffing against the previous sample; memory is a direct, un-approximated
+ * working-set read.
+ */
+export async function getBackendResourceUsage(): Promise<ResourceUsage | null> {
+  if (!child?.pid || process.platform !== 'win32') return null;
+  try {
+    const { stdout } = await execFileAsync('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `Get-Process -Id ${child.pid} | ForEach-Object { "$($_.WorkingSet64)"; "$($_.TotalProcessorTime)" }`,
+    ]);
+    // WorkingSet64 (bytes) and TotalProcessorTime (a TimeSpan, printed as
+    // "d.hh:mm:ss.fffffff" or "hh:mm:ss.fffffff") come back as two lines.
+    const lines = stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const workingSetBytes = Number(lines[0]);
+    const cpuSeconds = _parseDotNetTimeSpanSeconds(lines[1] ?? '');
+    if (!Number.isFinite(workingSetBytes) || cpuSeconds === null) return null;
+
+    const now = Date.now();
+    let cpuPercent: number | null = null;
+    if (lastCpuSample) {
+      const deltaWallSeconds = (now - lastCpuSample.atMs) / 1000;
+      const deltaCpuSeconds = cpuSeconds - lastCpuSample.cpuSeconds;
+      if (deltaWallSeconds > 0) {
+        cpuPercent = Math.max(0, (deltaCpuSeconds / deltaWallSeconds) * 100);
+      }
+    }
+    lastCpuSample = { atMs: now, cpuSeconds };
+
+    return { memoryMb: workingSetBytes / (1024 * 1024), cpuPercent };
+  } catch {
+    return null;
+  }
+}
+
+function _parseDotNetTimeSpanSeconds(raw: string): number | null {
+  const match = /^(?:(\d+)\.)?(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)$/.exec(raw.trim());
+  if (!match) return null;
+  const [, days, hours, minutes, seconds] = match;
+  return Number(days ?? 0) * 86400 + Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds);
 }

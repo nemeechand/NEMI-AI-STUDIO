@@ -1,8 +1,8 @@
 # ARCHITECTURE.md
 
-Version: 1.8
-Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8); Monaco Code Editor Locked (Sprint 9); AI Chat & Agent Framework Locked (Sprint 10); Agent Orchestration Framework Locked (Sprint 11)
-Governs: Sprint 11 onward
+Version: 1.9
+Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8); Monaco Code Editor Locked (Sprint 9); AI Chat & Agent Framework Locked (Sprint 10); Agent Orchestration Framework Locked (Sprint 11); Workflow Engine & AI Project Manager Locked (Sprint 12)
+Governs: Sprint 12 onward
 
 ---
 
@@ -143,8 +143,8 @@ Three processes, already implemented and hardened in Sprint 2:
 ## IPC Boundary (locked decision)
 
 All renderer → native calls go through `window.nemi`
-(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 11
-this surface has six namespaces: `windowControls` (Sprint 2),
+(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 12
+this surface has eight namespaces: `windowControls` (Sprint 2),
 `backend` (Sprint 4: `health()`; Sprint 5: `logs()`), `fs`
 (Sprint 5: project/file CRUD + change notifications; Sprint 7:
 `selectDirectory()`, `createDirectory()`; Sprint 9: `listAllFiles()`
@@ -155,17 +155,22 @@ as the rest of `fs`, see FILESYSTEM OWNERSHIP below), `projects`
 `setApiKey()`/`clearApiKey()`, `listConversations()`/
 `createConversation()`/`renameConversation()`/`deleteConversation()`/
 `listMessages()`, `sendMessage()`/`cancelMessage()`/`onStreamEvent()`
-— see AI CHAT & AGENT FRAMEWORK below), and `agents` (Sprint 11:
+— see AI CHAT & AGENT FRAMEWORK below), `agents` (Sprint 11:
 `list()`, `listTasks()`/`getTask()`, `createPipeline()`,
-`cancelTask()`/`retryTask()`, `onTasksChanged()` — see AGENT
-ORCHESTRATION FRAMEWORK below). A component must never assume
-Node.js globals exist. All ambient types shared across `window.nemi`
-methods (`ExplorerEntry`, `LogEntry`, `BackendHealth`, `ProjectRecord`,
-`SearchMatch`, `SearchOptions`, `AiProviderInfo`, `AiConversation`,
-`AiMessage`, `AiContextRef`, `AiStreamEventPayload`, `AgentInfo`,
-`AgentRoleKey`, `AgentTask`, `ProposedFile`, etc.) live inside
-the `declare global` block of `electron-api.d.ts` so they're usable
-anywhere in the renderer without imports.
+`cancelTask()`/`retryTask()`, `onTasksChanged()`; Sprint 12:
+`approveTask()`, `markFilesApplied()` — see AGENT ORCHESTRATION
+FRAMEWORK below), `workflows` (Sprint 12: `list()`, `get()`,
+`create()`, `pause()`/`resume()`/`cancel()`), and `system` (Sprint 12:
+`getResourceUsage()` — see WORKFLOW ENGINE & AI PROJECT MANAGER
+below). A component must never assume Node.js globals exist. All
+ambient types shared across `window.nemi` methods (`ExplorerEntry`,
+`LogEntry`, `BackendHealth`, `ProjectRecord`, `SearchMatch`,
+`SearchOptions`, `AiProviderInfo`, `AiConversation`, `AiMessage`,
+`AiContextRef`, `AiStreamEventPayload`, `AgentInfo`, `AgentRoleKey`,
+`AgentTask`, `ProposedFile`, `Workflow`, `WorkflowDetail`,
+`Milestone`, `ResourceUsage`, etc.) live inside the `declare global`
+block of `electron-api.d.ts` so they're usable anywhere in the
+renderer without imports.
 
 The renderer never talks to the backend HTTP API directly — it has no
 network access to it, and the CSP's `connect-src 'self'` intentionally
@@ -882,6 +887,150 @@ exchange), not a live-streaming view of the task card itself.
 
 ---
 
+# WORKFLOW ENGINE & AI PROJECT MANAGER (locked decision — Sprint 12)
+
+Builds MASTER_SPECIFICATION's AI Project Manager on top of the Agent
+Orchestration Framework (above): a user gives one high-level goal, and
+the system turns it into an ordered set of milestones, each executed
+as its own planner/developer/reviewer/tester pipeline — with pause/
+resume/cancel, human approval gating, and a live Sprint Progress
+Center, without inventing a second execution engine alongside
+Sprint 11's.
+
+**A workflow's very first task IS the AI Project Manager, reusing the
+Planner role rather than adding a ninth agent persona.** `POST
+/workflows` creates a `workflows` row (`status='planning'`) plus a
+single `agent_tasks` row: `agent_role='planner'`, `workflow_id` set,
+`milestone_id` NULL. That combination — a Planner task with a workflow
+but no milestone — is what `manager.py`'s `_execute()` recognizes as
+"decompose the goal, don't plan a single already-scoped task": it
+appends `project_manager.MILESTONE_FORMAT_INSTRUCTION` to the
+Planner's normal system prompt, asking for `### MILESTONE: <title>`
+sections, mirroring `agent_roles.py`'s own `# Heading` splitting
+convention. Crucially, this decomposition call is **not** a synchronous
+API request — it's scheduled and executed through the exact same
+`run_cycle()` every other agent task goes through, so it gets
+retries/no-server-side-keys/parallelism for free instead of a second,
+inconsistent execution path. `project_manager.parse_milestones()`
+parses the response (mirroring `_extract_proposed_files()`'s
+regex-parsing convention); an empty result fails the workflow outright
+with a visible, honest error rather than leaving it silently stuck at
+`'planning'` forever — the same small-model instruction-following risk
+already documented for Sprint 11's `proposed_files` format.
+
+**Each milestone becomes a full 4-stage pipeline, chained into one
+linear sequence across the whole workflow — not a multi-parent
+dependency graph.** `project_manager.create_milestone_pipelines()`
+creates a `milestones` row plus
+planner→developer→reviewer→tester `agent_tasks` per milestone
+(reusing `AgentTasksRepository.create()` exactly as Sprint 11's
+`POST /agents/tasks` does), with each milestone's first stage
+depending on the *previous* milestone's last stage (or, for the first
+milestone, on the goal-decomposition task itself). `depends_on_task_id`
+remains the single-link column Sprint 11 defined — extending it to a
+true DAG (fan-out/fan-in) was considered and deliberately deferred, since
+nothing in this sprint's requirements calls for one and Sprint 11
+already scoped it this way.
+
+**Pause/Resume are implemented by filtering, not by touching task
+status.** `AgentTasksRepository.list_runnable()` gained a join against
+`workflows`: a task is only runnable if its workflow (when it has one)
+is in `'planning'`, `'queued'`, or `'running'` — `'paused'` and every
+terminal status silently stop new tasks from starting, with zero
+changes to the tasks' own `status` column. This is why Resume is exact:
+whatever was `'queued'` when paused is still `'queued'` after
+resuming, picked up on the next scheduling pass exactly where it left
+off. A task already `'running'` when a workflow is paused is left to
+finish its in-flight call — the same "no force-abort mid-call"
+behavior Sprint 11's per-task cancel already has.
+
+**Human Approval Mode is a per-task gate, not a new task-status
+value.** Adding `'pending_approval'` to `agent_tasks.status`'s CHECK
+constraint would have required rebuilding the table (SQLite can't
+alter a CHECK constraint in place, and Sprint 11 already shipped
+`agent_tasks` without anticipating this value) — avoided entirely by
+adding two additive columns instead: `requires_approval` (set at
+creation time when a workflow's `approval_mode='manual'`) and
+`approved_at` (nullable, set by `POST /agents/tasks/{id}/approve`).
+`list_runnable()`'s WHERE clause excludes any task with
+`requires_approval=1 AND approved_at IS NULL` — the task stays
+genuinely `'queued'` the whole time, just invisible to the scheduler
+until a human approves it. The three modes: **Fully Automatic**
+(`approval_mode='auto'`) — every stage runs unattended *and*
+Developer-proposed files are written to disk without a click (see
+below); **Review Before Apply** (`'review'`, the default, and exactly
+Sprint 11's original behavior unchanged) — stages run unattended,
+proposed files wait for a human Apply; **Manual Approval**
+(`'manual'`) — every single stage, including the goal-decomposition
+task itself, waits for an explicit approval before it starts.
+
+**Fully Automatic's auto-apply lives in the renderer
+(`WorkflowsProvider.tsx`), not Electron main or the backend.** The
+backend cannot write files itself (Sprint 5's locked Filesystem
+Ownership decision is unchanged), and Electron main has no reliable
+way to know which project is "current" — that's renderer-side
+`ProjectContext` state. So `WorkflowsProvider`'s own poll (mirroring
+`AgentsProvider`'s cadence) scans active `'auto'`-mode workflows'
+completed Developer tasks for unapplied `proposed_files`, writes them
+via the existing `window.nemi.fs.writeFile()` path (the same one the
+manual Apply button already uses), then calls the new
+`POST /agents/tasks/{id}/mark-files-applied` so a later poll never
+repeats the write — `proposed_files_applied` persists the "did this
+already happen" flag server-side rather than relying on component
+state that resets on reload (a small durability improvement over
+Sprint 11's original in-memory-only Apply tracking).
+
+**Agent Collaboration's conflict detection is real, not fabricated.**
+When a Developer stage completes with proposed files, `manager.py`'s
+`_detect_conflicts()` cross-references every other task in the same
+workflow for an overlapping proposed path (parallel milestones, or a
+retry racing an earlier attempt, can genuinely collide) and records a
+human-visible `conflict_warning` on the task — flagged, never silently
+auto-merged or resolved. Verified directly (not by trying to coerce
+two live model calls into colliding, which isn't reliably reproducible)
+via a test that seeds two tasks with an overlapping path and asserts
+the warning appears with the correct sibling task named.
+
+**Auto Resume after restart** is `AgentTasksRepository.
+requeue_orphaned_running_tasks()`, called once in `server.py`'s
+`_lifespan()` after `init_db()`: any `agent_tasks` row still
+`status='running'` at startup can only be a leftover from a process
+that died mid-execution — a clean run always transitions a task onward
+via `mark_completed`/`mark_failed_or_retry`, so there is no live call
+left to finish. Requeuing it (`status='queued'`, `started_at=NULL`)
+lets `run_cycle()` naturally pick it back up on the very next
+scheduling pass, satisfying "Background Worker: resume unfinished
+work" without a separate resume-tracking mechanism.
+
+**Sprint Progress Center is read-derived, not a separately-maintained
+summary.** `_sync_workflow_progress()` (called from `_run_task()`'s
+`finally` block whenever a workflow-scoped task finishes) re-derives
+each milestone's status from its own tasks' real statuses, then the
+workflow's status from all its tasks — a workflow already in a
+terminal state is left alone so a straggling in-flight task finishing
+after a cancel can't resurrect it. The frontend's
+`SprintProgressCenter.tsx` renders percentage/counters/current-agent
+directly from this derived state (`GET /workflows/{id}` returns the
+full `milestones`+`tasks` detail in one call) rather than a
+duplicated, driftable summary table. ETA is a stated estimate
+(`average completed-task duration × remaining task count`), never
+implied as exact. "Resource usage" reports the actual backend child
+process's real memory (`Get-Process -Id <pid>`, exact) and CPU
+(computed by diffing `TotalProcessorTime` between two samples —
+approximate, labeled as such) — this app's only packaged target is
+Windows (`package.json`'s `build.win`), so a Windows-specific
+`Get-Process` call is the pragmatic honest choice over a native addon,
+returning `null` on any other platform or if the process can't be
+inspected, never a fabricated number.
+
+**Explicitly out of scope**, stated up front: a true multi-parent
+dependency graph (fan-out/fan-in) — pipelines and milestone chains are
+linear; live token-by-token streaming into the Progress Center itself
+(a task's progress is visible via its status and a link into the full
+conversation); and resource usage for platforms other than Windows.
+
+---
+
 # PLUGIN / EXTENSION ARCHITECTURE (future — not started)
 
 MASTER_SPECIFICATION.md lists "Plugin Marketplace" under FUTURE
@@ -1042,6 +1191,37 @@ must never run with Node.js integration in the renderer.
     failure cascade-cancels every downstream queued task in that
     pipeline rather than leaving them stuck waiting on a dependency
     that will never complete.
+34. **(Sprint 12)** The AI Project Manager reuses the existing Planner
+    role (a Planner task with a workflow but no milestone yet), run
+    through the same stateless `run_cycle()` every other agent task
+    uses — not a synchronous API call and not a ninth agent persona.
+35. **(Sprint 12)** Workflow Pause/Resume is implemented by filtering
+    `list_runnable()` against the parent workflow's status, with zero
+    changes to the task's own `status` column — Resume is exact
+    because nothing about a paused task's state ever changed.
+36. **(Sprint 12)** Human Approval Mode's "Manual" tier is two additive
+    columns (`requires_approval`, `approved_at`), not a new
+    `agent_tasks.status` value — adding a CHECK-constrained value to an
+    existing SQLite table requires a full table rebuild, which this
+    avoids entirely.
+37. **(Sprint 12)** Milestone chains are one linear sequence across the
+    whole workflow (each milestone's first stage depends on the
+    previous milestone's last stage) — `depends_on_task_id` remains
+    Sprint 11's single-link column, not extended into a multi-parent
+    dependency graph.
+38. **(Sprint 12)** Fully Automatic approval mode's auto-apply of
+    Developer-proposed files happens in the renderer
+    (`WorkflowsProvider.tsx`), not Electron main or the backend — the
+    backend still never writes files (Sprint 5), and only the renderer
+    reliably knows which project is current.
+39. **(Sprint 12)** "Auto Resume after restart" requeues any
+    `agent_tasks` row still `status='running'` at backend startup —
+    such a row can only be a leftover from a process that died
+    mid-execution, since a clean run always transitions it onward.
+40. **(Sprint 12)** Resource usage reporting is Windows-specific
+    (`Get-Process`), matching this app's only packaged target
+    (`package.json`'s `build.win`) — returns `null` elsewhere rather
+    than a fabricated number.
 
 ---
 

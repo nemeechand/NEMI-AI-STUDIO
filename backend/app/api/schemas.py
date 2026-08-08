@@ -147,6 +147,12 @@ class AgentTaskOut(BaseModel):
     result_summary: str | None
     proposed_files: list[ProposedFileOut] | None
     error_message: str | None
+    workflow_id: str | None = None
+    milestone_id: str | None = None
+    requires_approval: bool = False
+    approved_at: str | None = None
+    proposed_files_applied: bool = False
+    conflict_warning: str | None = None
     created_at: str
     updated_at: str
     started_at: str | None
@@ -169,3 +175,54 @@ class AgentRunCycleRequest(BaseModel):
 
 class AgentRunCycleResult(BaseModel):
     started: int
+
+
+# --- Workflow Engine / AI Project Manager (Sprint 12) ---
+
+WorkflowStatus = Literal[
+    "planning", "queued", "running", "paused", "completed", "failed", "cancelled"
+]
+ApprovalMode = Literal["auto", "review", "manual"]
+MilestoneStatus = Literal["pending", "queued", "running", "completed", "failed", "cancelled"]
+
+
+class MilestoneOut(BaseModel):
+    id: str
+    workflow_id: str
+    title: str
+    description: str
+    order_index: int
+    status: MilestoneStatus
+    created_at: str
+    updated_at: str
+
+
+class WorkflowOut(BaseModel):
+    id: str
+    project_id: str | None
+    title: str
+    goal: str
+    status: WorkflowStatus
+    approval_mode: ApprovalMode
+    provider: str
+    model: str
+    conversation_id: str | None
+    error_message: str | None
+    created_at: str
+    updated_at: str
+    started_at: str | None
+    completed_at: str | None
+
+
+class WorkflowDetailOut(WorkflowOut):
+    milestones: list[MilestoneOut]
+    tasks: list[AgentTaskOut]
+
+
+class WorkflowCreate(BaseModel):
+    project_id: str | None = None
+    title: str = Field(min_length=1, max_length=200)
+    goal: str = Field(min_length=1, max_length=20_000)
+    provider: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    approval_mode: ApprovalMode = "review"

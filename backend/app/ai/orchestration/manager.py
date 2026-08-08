@@ -6,6 +6,11 @@ from typing import Any
 
 from app.ai.agent_roles import load_agent_roles
 from app.ai.errors import MissingApiKeyError, ProviderError
+from app.ai.orchestration.project_manager import (
+    MILESTONE_FORMAT_INSTRUCTION,
+    create_milestone_pipelines,
+    parse_milestones,
+)
 from app.ai.registry import get_provider
 from app.ai.types import ChatMessage, StreamChunk, StreamDone, TokenUsage
 from app.core.config import Settings
@@ -16,6 +21,8 @@ from app.db.repositories.agents_repository import AgentsRepository
 from app.db.repositories.ai_conversations_repository import ConversationsRepository
 from app.db.repositories.ai_messages_repository import MessagesRepository
 from app.db.repositories.memory_repository import MemoryRepository
+from app.db.repositories.milestones_repository import MilestonesRepository, MilestoneStatus
+from app.db.repositories.workflows_repository import WorkflowsRepository
 
 logger = get_logger("ai.orchestration")
 
@@ -85,6 +92,9 @@ async def _run_task(settings: Settings, task_id: str, api_keys: dict[str, str]) 
     except Exception:
         logger.exception("Unhandled error running agent task %s", task_id)
         _handle_failure(settings, task_id, "An unexpected error occurred.")
+    finally:
+        if task["workflow_id"]:
+            _sync_workflow_progress(settings, task["workflow_id"])
 
 
 def _handle_failure(settings: Settings, task_id: str, message: str) -> None:
@@ -109,9 +119,17 @@ async def _execute(settings: Settings, task: dict[str, Any], api_keys: dict[str,
     if role is None:
         raise ProviderError(f"No role definition found for '{role_key}'")
 
+    # A workflow's very first task is a Planner task with no milestone yet
+    # — its job is to decompose the user's goal into milestones (see
+    # project_manager.py), not to plan one already-scoped piece of work
+    # the way every other Planner task in the pipeline does.
+    is_decomposition_task = bool(task["workflow_id"]) and task["milestone_id"] is None
+
     system_prompt = role.system_prompt
     if role_key == "developer":
         system_prompt += _DEVELOPER_FILE_BLOCK_INSTRUCTION
+    elif is_decomposition_task:
+        system_prompt += MILESTONE_FORMAT_INSTRUCTION
 
     # Agent-to-agent communication: recall the dependency's result from
     # `memory` — durable, so it survives a backend restart mid-pipeline,
@@ -191,3 +209,119 @@ async def _execute(settings: Settings, task: dict[str, Any], api_keys: dict[str,
             result_summary=content[:2000],
             proposed_files=proposed_files or None,
         )
+
+        if role_key == "developer" and proposed_files and task["workflow_id"]:
+            _detect_conflicts(connection, task, proposed_files)
+
+        if is_decomposition_task:
+            _apply_decomposition(connection, task, content)
+
+
+def _detect_conflicts(
+    connection: Any, task: dict[str, Any], proposed_files: list[dict[str, str]]
+) -> None:
+    """Agent Collaboration's conflict detection: two Developer tasks in the
+    same workflow (parallel milestones, or a retry racing an earlier
+    attempt) proposing changes to the same file path is a real collision
+    a human should see before applying either — flagged, never silently
+    resolved or auto-merged."""
+    siblings = AgentTasksRepository(connection).list_for_workflow(task["workflow_id"])
+    proposed_paths = {f["path"] for f in proposed_files}
+    conflicts = []
+    for sibling in siblings:
+        if sibling["id"] == task["id"]:
+            continue
+        sibling_paths = {f["path"] for f in (sibling.get("proposed_files") or [])}
+        overlap = proposed_paths & sibling_paths
+        if overlap:
+            conflicts.append(f'"{sibling["title"]}" on {sorted(overlap)}')
+    if conflicts:
+        AgentTasksRepository(connection).set_conflict_warning(
+            task["id"], "Proposed files overlap with: " + "; ".join(conflicts)
+        )
+
+
+def _apply_decomposition(connection: Any, task: dict[str, Any], content: str) -> None:
+    """Turns the goal-decomposition Planner task's output into real
+    milestone + pipeline rows, or fails the workflow outright if the
+    model didn't follow the required format — an honest failure, not a
+    silent no-op that would leave the workflow stuck at 'planning'
+    forever with no visible reason."""
+    workflow = WorkflowsRepository(connection).get(task["workflow_id"])
+    if workflow is None:
+        return
+    milestones_data = parse_milestones(content)
+    if not milestones_data:
+        WorkflowsRepository(connection).set_status(
+            workflow["id"],
+            "failed",
+            error_message=(
+                "The AI Project Manager could not parse any milestones from the "
+                "plan. Try rephrasing the goal, or a different model."
+            ),
+        )
+        return
+    create_milestone_pipelines(
+        connection,
+        workflow=workflow,
+        milestones_data=milestones_data,
+        decomposition_task_id=task["id"],
+    )
+    WorkflowsRepository(connection).set_status(workflow["id"], "queued")
+
+
+def _sync_workflow_progress(settings: Settings, workflow_id: str) -> None:
+    """Re-derives milestone and workflow status from their underlying
+    agent_tasks' real statuses after every task transition — a workflow
+    already in a terminal state (completed/failed/cancelled) is left
+    alone, since a straggling in-flight task finishing afterward (e.g.
+    one already running when the workflow was cancelled) shouldn't be
+    able to resurrect it."""
+    with get_connection(settings) as connection:
+        workflows_repo = WorkflowsRepository(connection)
+        workflow = workflows_repo.get(workflow_id)
+        if workflow is None or workflow["status"] in ("completed", "failed", "cancelled"):
+            return
+
+        tasks_repo = AgentTasksRepository(connection)
+        milestones_repo = MilestonesRepository(connection)
+        tasks = tasks_repo.list_for_workflow(workflow_id)
+        milestones = milestones_repo.list_for_workflow(workflow_id)
+
+        for milestone in milestones:
+            milestone_tasks = [t for t in tasks if t["milestone_id"] == milestone["id"]]
+            if not milestone_tasks:
+                continue
+            statuses = {t["status"] for t in milestone_tasks}
+            new_status: MilestoneStatus
+            if statuses <= {"completed"}:
+                new_status = "completed"
+            elif "failed" in statuses:
+                new_status = "failed"
+            elif "running" in statuses or "completed" in statuses:
+                new_status = "running"
+            elif statuses <= {"cancelled"}:
+                new_status = "cancelled"
+            else:
+                new_status = milestone["status"]
+            if new_status != milestone["status"]:
+                milestones_repo.set_status(milestone["id"], new_status)
+
+        if not tasks:
+            return
+        all_statuses = {t["status"] for t in tasks}
+        if all_statuses <= {"completed"}:
+            workflows_repo.set_status(workflow_id, "completed")
+        elif "failed" in all_statuses:
+            workflows_repo.set_status(
+                workflow_id,
+                "failed",
+                error_message="One or more milestone tasks failed permanently.",
+            )
+        elif "running" in all_statuses or "completed" in all_statuses:
+            if workflow["status"] != "paused":
+                workflows_repo.set_status(workflow_id, "running")
+        elif all_statuses <= {"cancelled"}:
+            workflows_repo.set_status(workflow_id, "cancelled")
+        elif "queued" in all_statuses and workflow["status"] == "planning":
+            workflows_repo.set_status(workflow_id, "queued")

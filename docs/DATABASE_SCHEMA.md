@@ -1,7 +1,7 @@
 # DATABASE_SCHEMA.md
 
-Version: 1.4
-Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4); `projects` Repository Implemented (Sprint 7); `ai_conversations`/`ai_messages` Added and Implemented (Sprint 10); `agent_tasks` Added and `memory` Repository Implemented (Sprint 11)
+Version: 1.5
+Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4); `projects` Repository Implemented (Sprint 7); `ai_conversations`/`ai_messages` Added and Implemented (Sprint 10); `agent_tasks` Added and `memory` Repository Implemented (Sprint 11); `workflows`/`milestones` Added and `agent_tasks` Extended (Sprint 12)
 Engine: SQLite
 
 ---
@@ -223,6 +223,12 @@ Index: `idx_ai_messages_conversation_id` on `conversation_id`.
 | result_summary      | TEXT    |                                                                        | nullable — the completed stage's output, also written to `memory` for the next stage |
 | proposed_files      | TEXT    |                                                                        | nullable, JSON-encoded array of `{path, content}` — Developer-stage output only, never auto-applied |
 | error_message       | TEXT    |                                                                        | nullable, populated on failure                    |
+| workflow_id         | TEXT    | (Sprint 12)                                                           | nullable — null means a standalone Sprint 11 pipeline, not part of an AI Project Manager workflow |
+| milestone_id        | TEXT    | (Sprint 12)                                                           | nullable — null for the one goal-decomposition task per workflow (see `workflows` below); set for every milestone-pipeline task |
+| requires_approval   | INTEGER | (Sprint 12) NOT NULL DEFAULT 0                                        | boolean (0/1) — Human Approval Mode "Manual"; `list_runnable()` excludes this task until `approved_at` is set |
+| approved_at         | TEXT    | (Sprint 12)                                                           | nullable — set by `POST /agents/tasks/{id}/approve` |
+| proposed_files_applied | INTEGER | (Sprint 12) NOT NULL DEFAULT 0                                     | boolean (0/1) — set once `proposed_files` has actually been written to disk (manually via Apply, or automatically under Fully Automatic mode), so a reload doesn't lose that state |
+| conflict_warning    | TEXT    | (Sprint 12)                                                           | nullable — set when another task in the same workflow proposed an overlapping file path (see ARCHITECTURE.md's conflict detection) |
 | created_at          | TEXT    | NOT NULL                                                              |                                                    |
 | updated_at          | TEXT    | NOT NULL                                                              |                                                    |
 | started_at          | TEXT    |                                                                        | nullable                                          |
@@ -232,6 +238,47 @@ Indexes: `idx_agent_tasks_project_id` on `project_id`,
 `idx_agent_tasks_status` on `status` (drives
 `list_runnable()`'s scheduling query), `idx_agent_tasks_depends_on`
 on `depends_on_task_id`.
+
+The six Sprint 12 columns are all additive/nullable-or-defaulted,
+added via `_add_column_if_missing()` — deliberately not touching the
+`status` CHECK constraint (SQLite can't alter one in place on a table
+that already shipped in Sprint 11 without a full table rebuild).
+
+## workflows (Sprint 12)
+
+| Column         | Type | Constraints                                                                                   | Notes                                          |
+|----------------|------|--------------------------------------------------------------------------------------------------|---------------------------------------------------|
+| id             | TEXT | PRIMARY KEY                                                                                     |                                                     |
+| project_id     | TEXT | FK → projects.id                                                                                | nullable — null means a global (unscoped) workflow |
+| title          | TEXT | NOT NULL                                                                                        | user-given short label                             |
+| goal           | TEXT | NOT NULL                                                                                        | the user's high-level goal, given to the goal-decomposition Planner task |
+| status         | TEXT | NOT NULL, CHECK IN ('planning','queued','running','paused','completed','failed','cancelled'), DEFAULT 'planning' | re-derived from the workflow's tasks by `_sync_workflow_progress()`, except while `'paused'` or already terminal |
+| approval_mode  | TEXT | NOT NULL, CHECK IN ('auto','review','manual'), DEFAULT 'review'                                | Human Approval Mode — see ARCHITECTURE.md          |
+| provider       | TEXT | NOT NULL                                                                                        |                                                     |
+| model          | TEXT | NOT NULL                                                                                        |                                                     |
+| conversation_id| TEXT | FK → ai_conversations.id                                                                        | nullable — currently unused (each task has its own conversation instead), reserved for a future workflow-level summary conversation |
+| error_message  | TEXT |                                                                                                    | nullable, e.g. "could not parse any milestones"    |
+| created_at     | TEXT | NOT NULL                                                                                        |                                                     |
+| updated_at     | TEXT | NOT NULL                                                                                        |                                                     |
+| started_at     | TEXT |                                                                                                    | nullable                                           |
+| completed_at   | TEXT |                                                                                                    | nullable                                           |
+
+Index: `idx_workflows_project_id` on `project_id`.
+
+## milestones (Sprint 12)
+
+| Column      | Type    | Constraints                                                                          | Notes                                    |
+|-------------|---------|-----------------------------------------------------------------------------------------|---------------------------------------------|
+| id          | TEXT    | PRIMARY KEY                                                                             |                                               |
+| workflow_id | TEXT    | NOT NULL, FK → workflows.id                                                            |                                               |
+| title       | TEXT    | NOT NULL                                                                                | parsed from the AI Project Manager's `### MILESTONE: <title>` output |
+| description | TEXT    | NOT NULL                                                                                | becomes the `description` for that milestone's own 4-stage pipeline |
+| order_index | INTEGER | NOT NULL                                                                                | execution order — milestone chains run sequentially, not in parallel |
+| status      | TEXT    | NOT NULL, CHECK IN ('pending','queued','running','completed','failed','cancelled'), DEFAULT 'pending' | re-derived from its own tasks' statuses    |
+| created_at  | TEXT    | NOT NULL                                                                                |                                               |
+| updated_at  | TEXT    | NOT NULL                                                                                |                                               |
+
+Index: `idx_milestones_workflow_id` on `workflow_id`.
 
 ---
 
@@ -245,9 +292,13 @@ projects 1---* logs             (project_id nullable)
 projects 1---* history          (project_id nullable)
 projects 1---* ai_conversations (project_id nullable)
 projects 1---* agent_tasks      (project_id nullable)
+projects 1---* workflows        (project_id nullable)
 ai_conversations 1---* ai_messages
 ai_conversations 0..1---1 agent_tasks   (agent_tasks.conversation_id; nullable until execution starts)
 agent_tasks 0..1---* agent_tasks        (depends_on_task_id — a single link per task, not a graph)
+workflows 1---* milestones
+workflows 1---* agent_tasks     (agent_tasks.workflow_id; nullable — null for standalone Sprint 11 pipelines)
+milestones 1---* agent_tasks    (agent_tasks.milestone_id; nullable — null for the one goal-decomposition task per workflow)
 agents   (standalone, referenced by tasks.agent as a name, not a FK —
           keeps task history readable even if an agent is later removed;
           agent_tasks.agent_role is likewise a name, not a FK)
@@ -255,7 +306,7 @@ agents   (standalone, referenced by tasks.agent as a name, not a FK —
 
 ---
 
-# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7, Sprint 10, Sprint 11)
+# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7, Sprint 10, Sprint 11, Sprint 12)
 
 - Schema implemented exactly as designed above:
   `backend/app/db/schema.py::SCHEMA_STATEMENTS` /  `init_db()`.
@@ -276,19 +327,34 @@ agents   (standalone, referenced by tasks.agent as a name, not a FK —
   `AgentsRepository` (seeds/reads the `agents` table),
   `AgentTasksRepository` (full CRUD plus the scheduling queries
   `list_runnable()`/`mark_failed_or_retry()`/
-  `cascade_cancel_dependents()`), and `MemoryRepository` (`memory`'s
-  first real implementation) back the `GET/POST /logs`,
+  `cascade_cancel_dependents()`, extended in Sprint 12 with
+  `approve()`/`mark_files_applied()`/`requeue_orphaned_running_tasks()`),
+  and `MemoryRepository` (`memory`'s first real implementation) back
+  the `GET/POST /logs`,
   `GET /projects/recent`/`POST /projects/opened`/`DELETE /projects/{id}`,
-  `/ai/conversations*`, and `/agents*` APIs respectively. The
-  remaining two tables (`tasks`, `settings`) plus the still-generic
-  `history` table are schema-ready but intentionally have no
-  repository or business logic yet; those arrive with the sprints that
-  actually need them, per the Planner principle "database before
-  business logic" — the schema had to exist first, but a table being
-  queryable doesn't mean its feature is built. Note `tasks` (Sprint 3
-  design, generic project task tracking) is distinct from Sprint 11's
-  `agent_tasks` (agent pipeline scheduling) — different tables for
-  different concerns, not a rename.
+  `/ai/conversations*`, and `/agents*` APIs respectively. As of
+  Sprint 12, `WorkflowsRepository` and `MilestonesRepository` back the
+  new `/workflows*` API. The remaining two tables (`tasks`, `settings`)
+  plus the still-generic `history` table are schema-ready but
+  intentionally have no repository or business logic yet; those arrive
+  with the sprints that actually need them, per the Planner principle
+  "database before business logic" — the schema had to exist first,
+  but a table being queryable doesn't mean its feature is built. Note
+  `tasks` (Sprint 3 design, generic project task tracking) is distinct
+  from Sprint 11's `agent_tasks` (agent pipeline scheduling) and
+  Sprint 12's `workflows` (AI Project Manager goals) — different
+  tables for different concerns, not a rename.
+- **`workflows`/`milestones` are new tables added this sprint
+  (Sprint 12)**, for the same reason `agent_tasks` was added in
+  Sprint 11: a workflow's own lifecycle (`planning` → ... →
+  `completed`/`failed`/`cancelled`, `approval_mode`) and a milestone's
+  ordered position within it aren't naturally expressed by reusing
+  `agent_tasks` rows alone. `agent_tasks` itself gained six additive
+  columns (`workflow_id`, `milestone_id`, `requires_approval`,
+  `approved_at`, `proposed_files_applied`, `conflict_warning`) via
+  `_add_column_if_missing()` — deliberately none of them touch the
+  existing `status` CHECK constraint (see the `agent_tasks` table
+  section above for why).
 - **`agent_tasks` is a new table added this sprint (Sprint 11)**, for
   the same reason `ai_conversations`/`ai_messages` were added in
   Sprint 10: a real, queryable, indexable shape (status, dependency

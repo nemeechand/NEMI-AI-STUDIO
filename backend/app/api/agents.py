@@ -99,6 +99,36 @@ def retry_task(task_id: str) -> dict[str, Any]:
         return repo.get(task_id)  # type: ignore[return-value]
 
 
+@router.post("/tasks/{task_id}/approve", response_model=AgentTaskOut)
+def approve_task(task_id: str) -> dict[str, Any]:
+    """Human Approval Mode's "Manual" tier: a task created with
+    `requires_approval` stays excluded from `list_runnable()` until this
+    is called — see AgentTasksRepository.list_runnable."""
+    settings = get_settings()
+    with get_connection(settings) as connection:
+        repo = AgentTasksRepository(connection)
+        if not repo.approve(task_id):
+            raise HTTPException(
+                status_code=404, detail="Task not found or not awaiting approval"
+            )
+        return repo.get(task_id)  # type: ignore[return-value]
+
+
+@router.post("/tasks/{task_id}/mark-files-applied", response_model=AgentTaskOut)
+def mark_files_applied(task_id: str) -> dict[str, Any]:
+    """Called by Electron main after it has actually written a Developer
+    task's proposed files to disk (manually via the Dashboard's Apply
+    button, or automatically under Human Approval Mode = Fully Automatic)
+    — the backend never writes files itself (Sprint 5's locked Filesystem
+    Ownership decision), it only records that it happened."""
+    settings = get_settings()
+    with get_connection(settings) as connection:
+        repo = AgentTasksRepository(connection)
+        if not repo.mark_files_applied(task_id):
+            raise HTTPException(status_code=404, detail="Task not found")
+        return repo.get(task_id)  # type: ignore[return-value]
+
+
 @router.post("/run-cycle", response_model=AgentRunCycleResult)
 async def trigger_run_cycle(payload: AgentRunCycleRequest) -> dict[str, int]:
     settings = get_settings()

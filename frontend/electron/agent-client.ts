@@ -57,6 +57,7 @@ export interface AgentTask {
   approved_at: string | null;
   proposed_files_applied: boolean;
   conflict_warning: string | null;
+  live_output: string | null;
   created_at: string;
   updated_at: string;
   started_at: string | null;

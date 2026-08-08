@@ -15,6 +15,7 @@ import { ChatPanel } from '../chat/ChatPanel';
 import { AgentsDashboard } from '../agents/AgentsDashboard';
 import { NewAgentTaskModal } from '../agents/NewAgentTaskModal';
 import { NewWorkflowModal } from '../agents/NewWorkflowModal';
+import { IntelligenceCenter } from '../intelligence/IntelligenceCenter';
 import { CommandPalette } from '../../commands/CommandPalette';
 import { useCommand } from '../../commands/useCommand';
 import { useWorkspace } from '../../workspace/useWorkspace';
@@ -31,6 +32,7 @@ export function AppShell() {
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [newAgentTaskOpen, setNewAgentTaskOpen] = useState(false);
   const [newWorkflowOpen, setNewWorkflowOpen] = useState(false);
+  const [intelligenceCenterVisible, setIntelligenceCenterVisible] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const { groups, splitDirection, split, unsplit, saveAll, reopenClosedTab, openFile } =
@@ -79,6 +81,9 @@ export function AppShell() {
       } else if (event.code === 'KeyA' && event.shiftKey) {
         event.preventDefault();
         setAiChatVisible((prev) => !prev);
+      } else if (event.code === 'KeyI' && event.shiftKey) {
+        event.preventDefault();
+        setIntelligenceCenterVisible((prev) => !prev);
       }
     }
     window.addEventListener('keydown', handleKeyDown);
@@ -135,6 +140,12 @@ export function AppShell() {
     setSidebarPanel('agents');
     setNewWorkflowOpen(true);
   });
+  useCommand(
+    'view.toggleIntelligenceCenter',
+    'View: Toggle Live Dashboard (Intelligence Center)',
+    () => setIntelligenceCenterVisible((v) => !v),
+    { keybinding: 'Ctrl+Shift+I' },
+  );
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-surface text-fg">
@@ -145,6 +156,8 @@ export function AppShell() {
         onToggleLogger={() => setLoggerVisible((prev) => !prev)}
         aiChatVisible={aiChatVisible}
         onToggleAiChat={() => setAiChatVisible((prev) => !prev)}
+        intelligenceCenterVisible={intelligenceCenterVisible}
+        onToggleIntelligenceCenter={() => setIntelligenceCenterVisible((prev) => !prev)}
       />
       <div className="flex min-h-0 flex-1">
         <Sidebar
@@ -167,7 +180,9 @@ export function AppShell() {
           ))}
         <div className="flex min-w-0 flex-1 flex-col">
           <main className="flex min-h-0 flex-1 overflow-auto">
-            {hasOpenTabs ? (
+            {intelligenceCenterVisible ? (
+              <IntelligenceCenter onClose={() => setIntelligenceCenterVisible(false)} />
+            ) : hasOpenTabs ? (
               <div
                 className={`flex min-h-0 min-w-0 flex-1 ${
                   splitDirection === 'horizontal' ? 'flex-col' : 'flex-row'

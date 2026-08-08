@@ -12,6 +12,15 @@ import type {
 } from './ai-client';
 import type { AgentInfo, AgentRoleKey, AgentTask } from './agent-client';
 import type { ApprovalMode, Workflow, WorkflowDetail } from './workflow-client';
+import type { GitStatus } from './git-status';
+import type {
+  AvailableRunners,
+  RunnerId,
+  RunnerOutputEvent,
+  RunnerStatusEvent,
+} from './build-runner';
+import type { SystemMetrics } from './system-metrics';
+import type { HistoryEntry, PerformanceStats, TokenStats } from './stats-client';
 
 const backend = {
   health: (): Promise<BackendHealth> => ipcRenderer.invoke('backend:health'),
@@ -152,11 +161,47 @@ const workflowsApi = {
     ipcRenderer.invoke('workflows:resume', workflowId),
   cancel: (workflowId: string): Promise<Workflow> =>
     ipcRenderer.invoke('workflows:cancel', workflowId),
+  restart: (workflowId: string): Promise<Workflow> =>
+    ipcRenderer.invoke('workflows:restart', workflowId),
 };
 
 const systemApi = {
   getResourceUsage: (): Promise<ResourceUsage | null> =>
     ipcRenderer.invoke('system:resource-usage'),
+  getMetrics: (projectPath: string): Promise<SystemMetrics> =>
+    ipcRenderer.invoke('system:get-metrics', projectPath),
+};
+
+const gitApi = {
+  getStatus: (projectPath: string): Promise<GitStatus> =>
+    ipcRenderer.invoke('git:status', projectPath),
+};
+
+const buildApi = {
+  detectRunners: (projectPath: string): Promise<AvailableRunners> =>
+    ipcRenderer.invoke('build:detect-runners', projectPath),
+  runBuild: (projectPath: string): Promise<RunnerStatusEvent> =>
+    ipcRenderer.invoke('build:run', projectPath),
+  runTests: (projectPath: string): Promise<RunnerStatusEvent> =>
+    ipcRenderer.invoke('build:test', projectPath),
+  runVerification: (projectPath: string): Promise<RunnerStatusEvent> =>
+    ipcRenderer.invoke('build:verify', projectPath),
+  cancelRunner: (runnerId: RunnerId): Promise<boolean> =>
+    ipcRenderer.invoke('build:cancel', runnerId),
+  onOutput: (callback: (event: RunnerOutputEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: RunnerOutputEvent) =>
+      callback(payload);
+    ipcRenderer.on('build:output', listener);
+    return () => ipcRenderer.removeListener('build:output', listener);
+  },
+};
+
+const statsApi = {
+  getPerformance: (projectId: string | null): Promise<PerformanceStats> =>
+    ipcRenderer.invoke('stats:performance', projectId),
+  getTokens: (): Promise<TokenStats> => ipcRenderer.invoke('stats:tokens'),
+  getHistory: (projectId: string | null, limit?: number): Promise<HistoryEntry[]> =>
+    ipcRenderer.invoke('stats:history', projectId, limit),
 };
 
 const windowControls = {
@@ -181,4 +226,7 @@ contextBridge.exposeInMainWorld('nemi', {
   agents: agentsApi,
   workflows: workflowsApi,
   system: systemApi,
+  git: gitApi,
+  build: buildApi,
+  stats: statsApi,
 });

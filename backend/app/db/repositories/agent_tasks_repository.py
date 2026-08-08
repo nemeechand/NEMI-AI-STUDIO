@@ -185,6 +185,18 @@ class AgentTasksRepository:
         )
         self._connection.commit()
 
+    def update_live_output(self, task_id: str, content: str) -> None:
+        """Sprint 13: periodically flushed (not per-chunk) accumulated
+        streamed text for a `running` task — the AI Thinking Panel's data
+        source for genuine in-progress model output. Does not bump
+        `updated_at`: this is high-frequency, low-significance churn, not
+        a state transition other pollers should treat as "something
+        changed" (unlike every other write in this repository)."""
+        self._connection.execute(
+            "UPDATE agent_tasks SET live_output = ? WHERE id = ?", (content, task_id)
+        )
+        self._connection.commit()
+
     def mark_completed(
         self,
         task_id: str,
@@ -198,7 +210,7 @@ class AgentTasksRepository:
             """
             UPDATE agent_tasks
             SET status = 'completed', conversation_id = ?, result_summary = ?,
-                proposed_files = ?, completed_at = ?, updated_at = ?
+                proposed_files = ?, completed_at = ?, updated_at = ?, live_output = NULL
             WHERE id = ?
             """,
             (
@@ -226,7 +238,7 @@ class AgentTasksRepository:
             """
             UPDATE agent_tasks
             SET status = ?, retry_count = ?, error_message = ?, updated_at = ?,
-                completed_at = ?
+                completed_at = ?, live_output = NULL
             WHERE id = ?
             """,
             (
@@ -245,7 +257,8 @@ class AgentTasksRepository:
         now = datetime.now(UTC).isoformat()
         cursor = self._connection.execute(
             """
-            UPDATE agent_tasks SET status = 'cancelled', updated_at = ?, completed_at = ?
+            UPDATE agent_tasks SET status = 'cancelled', updated_at = ?, completed_at = ?,
+                live_output = NULL
             WHERE id = ? AND status IN ('queued', 'running')
             """,
             (now, now, task_id),
@@ -296,6 +309,32 @@ class AgentTasksRepository:
         )
         self._connection.commit()
         return cursor.rowcount > 0
+
+    def reset_tasks_for_workflow(self, workflow_id: str) -> list[str]:
+        """Sprint 13's "Restart Workflow": every `failed`/`cancelled` task
+        in the workflow goes back to a clean `queued` slate (mirroring
+        `retry()`'s semantics) so the scheduler picks the pipeline back up
+        from wherever it stopped — `completed` tasks are left untouched,
+        so a restart doesn't redo work that already succeeded."""
+        now = datetime.now(UTC).isoformat()
+        rows = self._connection.execute(
+            "SELECT id FROM agent_tasks WHERE workflow_id = ? "
+            "AND status IN ('failed', 'cancelled')",
+            (workflow_id,),
+        ).fetchall()
+        ids = [row["id"] for row in rows]
+        if ids:
+            self._connection.executemany(
+                """
+                UPDATE agent_tasks
+                SET status = 'queued', retry_count = 0, error_message = NULL,
+                    completed_at = NULL, started_at = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                [(now, task_id) for task_id in ids],
+            )
+            self._connection.commit()
+        return ids
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:

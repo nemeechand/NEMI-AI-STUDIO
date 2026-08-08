@@ -12,6 +12,7 @@ from app.api.ai import router as ai_router
 from app.api.health import router as health_router
 from app.api.logs import router as logs_router
 from app.api.projects import router as projects_router
+from app.api.stats import router as stats_router
 from app.api.workflows import router as workflows_router
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
@@ -57,6 +58,7 @@ def create_app() -> FastAPI:
     app.include_router(ai_router)
     app.include_router(agents_router)
     app.include_router(workflows_router)
+    app.include_router(stats_router)
     register_exception_handlers(app)
     return app
 

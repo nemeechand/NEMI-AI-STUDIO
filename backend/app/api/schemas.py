@@ -153,6 +153,7 @@ class AgentTaskOut(BaseModel):
     approved_at: str | None = None
     proposed_files_applied: bool = False
     conflict_warning: str | None = None
+    live_output: str | None = None
     created_at: str
     updated_at: str
     started_at: str | None

@@ -1,8 +1,8 @@
 # ARCHITECTURE.md
 
-Version: 1.9
-Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8); Monaco Code Editor Locked (Sprint 9); AI Chat & Agent Framework Locked (Sprint 10); Agent Orchestration Framework Locked (Sprint 11); Workflow Engine & AI Project Manager Locked (Sprint 12)
-Governs: Sprint 12 onward
+Version: 2.0
+Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8); Monaco Code Editor Locked (Sprint 9); AI Chat & Agent Framework Locked (Sprint 10); Agent Orchestration Framework Locked (Sprint 11); Workflow Engine & AI Project Manager Locked (Sprint 12); Live Development Dashboard & Intelligence Center Locked (Sprint 13)
+Governs: Sprint 13 onward
 
 ---
 
@@ -143,8 +143,8 @@ Three processes, already implemented and hardened in Sprint 2:
 ## IPC Boundary (locked decision)
 
 All renderer → native calls go through `window.nemi`
-(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 12
-this surface has eight namespaces: `windowControls` (Sprint 2),
+(declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 13
+this surface has eleven namespaces: `windowControls` (Sprint 2),
 `backend` (Sprint 4: `health()`; Sprint 5: `logs()`), `fs`
 (Sprint 5: project/file CRUD + change notifications; Sprint 7:
 `selectDirectory()`, `createDirectory()`; Sprint 9: `listAllFiles()`
@@ -160,15 +160,22 @@ as the rest of `fs`, see FILESYSTEM OWNERSHIP below), `projects`
 `cancelTask()`/`retryTask()`, `onTasksChanged()`; Sprint 12:
 `approveTask()`, `markFilesApplied()` — see AGENT ORCHESTRATION
 FRAMEWORK below), `workflows` (Sprint 12: `list()`, `get()`,
-`create()`, `pause()`/`resume()`/`cancel()`), and `system` (Sprint 12:
-`getResourceUsage()` — see WORKFLOW ENGINE & AI PROJECT MANAGER
-below). A component must never assume Node.js globals exist. All
-ambient types shared across `window.nemi` methods (`ExplorerEntry`,
-`LogEntry`, `BackendHealth`, `ProjectRecord`, `SearchMatch`,
-`SearchOptions`, `AiProviderInfo`, `AiConversation`, `AiMessage`,
-`AiContextRef`, `AiStreamEventPayload`, `AgentInfo`, `AgentRoleKey`,
-`AgentTask`, `ProposedFile`, `Workflow`, `WorkflowDetail`,
-`Milestone`, `ResourceUsage`, etc.) live inside the `declare global`
+`create()`, `pause()`/`resume()`/`cancel()`; Sprint 13: `restart()`),
+`system` (Sprint 12: `getResourceUsage()`; Sprint 13: `getMetrics()`
+— see LIVE DEVELOPMENT DASHBOARD & INTELLIGENCE CENTER below), `git`
+(Sprint 13: `getStatus()`), `build` (Sprint 13: `detectRunners()`,
+`runBuild()`/`runTests()`/`runVerification()`, `cancelRunner()`,
+`onOutput()`), and `stats` (Sprint 13: `getPerformance()`,
+`getTokens()`, `getHistory()`). A component must never assume Node.js
+globals exist. All ambient types shared across `window.nemi` methods
+(`ExplorerEntry`, `LogEntry`, `BackendHealth`, `ProjectRecord`,
+`SearchMatch`, `SearchOptions`, `AiProviderInfo`, `AiConversation`,
+`AiMessage`, `AiContextRef`, `AiStreamEventPayload`, `AgentInfo`,
+`AgentRoleKey`, `AgentTask`, `ProposedFile`, `Workflow`,
+`WorkflowDetail`, `Milestone`, `ResourceUsage`, `SystemMetrics`,
+`GitStatus`, `GitCommit`, `RunnerId`, `RunnerOutputEvent`,
+`RunnerStatusEvent`, `AvailableRunners`, `PerformanceStats`,
+`TokenStats`, `HistoryEntry`, etc.) live inside the `declare global`
 block of `electron-api.d.ts` so they're usable anywhere in the
 renderer without imports.
 
@@ -1031,6 +1038,113 @@ conversation); and resource usage for platforms other than Windows.
 
 ---
 
+# LIVE DEVELOPMENT DASHBOARD & INTELLIGENCE CENTER (locked decision — Sprint 13)
+
+A real-time operational view over everything the Agent Orchestration
+Framework (Sprint 11) and Workflow Engine (Sprint 12) already track,
+plus new real system/git/build integration — not a second data model,
+a read/aggregation layer over the existing one. Opened via a new
+HeaderToolbar button (or `Ctrl+Shift+I`), it replaces the main content
+area (editor or Dashboard) the same way Sprint 9's editor already
+takes over that region, with its own internal 12-section left nav
+(`frontend/src/components/intelligence/sections.ts`).
+
+**Every widget is backed by a real, honestly-labeled data source — the
+project's standing "no fabrication" practice extended to a sprint
+whose brief asks for more display surfaces than this app has real
+telemetry for.** Three deliberate substitutions, each documented at
+its own point of use rather than silently shipped: "AI logs" (a
+requested Live Terminal category) is folded into "Backend" logs
+because Sprint 4 already locked AI/orchestration logging into the same
+`backend.stdout`/`stderr` stream, not a separate one; "Network" in the
+Resource Monitor reports backend connectivity (ready/error), not
+bandwidth, since Node has no built-in cross-platform throughput API;
+and the Live Workflow View's `Documentation → Commit → Push` nodes
+render as explicitly `not yet automated — performed manually` rather
+than fake progress, since this app has no in-app commit/push action.
+
+**`GET /stats/performance`, `/stats/tokens`, `/history` are
+aggregation endpoints, not new stored state.** `StatsRepository`
+(`backend/app/db/repositories/stats_repository.py`) computes success/
+failure/retry rate and average task/agent duration fresh from
+`agent_tasks` on every call, and token sums (session/day/month
+windows) fresh from `ai_messages` (Sprint 10) — this app's data volume
+is single-user desktop scale, so there's no performance case for
+maintaining a running total. Estimated cost applies a small published
+list-pricing table (`backend/app/ai/pricing.py`) to real token counts;
+a model outside the table reports `estimated_cost_usd: null`, never a
+guessed number, and Ollama is always exactly `$0` (local, no billing).
+
+**Execution History is the `history` table's first real
+implementation** — schema-ready, unused, since Sprint 3.
+`HistoryRepository` records workflow/task lifecycle events
+(`action='updated'`, `snapshot` carries the specifics) at the API/
+orchestration layer, not inside the entity repositories themselves —
+consistent with `postLog()`'s own pattern of being called at the
+point of a real state change, not baked into a setter.
+
+**AI Thinking Panel's "current reasoning" is genuine partial model
+output, not fabricated.** `agent_tasks` gained one additive column,
+`live_output`, flushed by `manager.py`'s streaming loop every
+`LIVE_OUTPUT_FLUSH_INTERVAL_SECONDS` (1.5s) — frequent enough to feel
+live, infrequent enough to not turn every streamed token into its own
+SQLite write. Cleared back to `NULL` on completion, failure, or
+cancellation (`result_summary`/`error_message` take over). This was
+the one new column this sprint touched on `agent_tasks` — additive,
+same pattern as Sprint 12's six columns, no CHECK-constraint change.
+
+**Live Agent Monitor's per-role status is computed entirely
+client-side from data the app already polls** (`AgentsProvider`'s
+`tasks`) — no new backend endpoint. For each of
+Planner/Developer/Reviewer/Tester, the most recently updated task with
+that role determines Idle/Running/Waiting/Completed/Failed/Retrying;
+"Project Manager" is the same derivation scoped to goal-decomposition
+tasks (`milestone_id === null && workflow_id !== null`, see Sprint
+12's AI Project Manager); "Workflow Engine" reflects whether any task,
+system-wide, is currently `running`.
+
+**Build Center operates on the currently *open project*, never on
+NEMI AI STUDIO's own source — a packaged install has no `.git` or
+`package.json` for its own code at the install location, and the
+entire point of this platform is helping the user build *their*
+project.** `git-status.ts` and `build-runner.ts`
+(`frontend/electron/`) both take a `projectPath` argument rather than
+using `__dirname`. Git integration is read-only (branch, ahead/behind,
+dirty, recent commits via `git log`/`git rev-list` — never throws,
+reports `isRepo: false` on any failure rather than surfacing an
+error, since this is informational, not a required capability). Build/
+Test/Verify are real, detected capabilities, not assumed ones:
+`detectAvailableRunners()` only offers "Run Build"/"Run Tests" if the
+open project's `package.json` actually defines those npm scripts (or,
+for Test, if it looks like a Python project); "Run Verification" is a
+fast subset (`npx tsc --noEmit` or `python -m compileall`) — genuinely
+faster than a full build in the common case, though on a large
+project it can still take real wall-clock time, confirmed live
+(pegged system CPU during a real run, correctly reflected by the
+Resource Monitor's own live CPU reading at the same moment).
+
+**Notifications are derived from genuine state transitions, keyed
+per-entity, never from "this is the first time I've observed this
+item."** `IntelligenceProvider.tsx` tracks each workflow's and task's
+previous status in a `Map`; a status change only notifies when a prior
+status was already on record — an item's very first observation after
+mount only establishes the baseline. This distinction was added after
+a live-testing regression: without it, a workflow or task that had
+already reached `failed`/`completed` in an earlier session re-fired
+its notification the instant the dashboard mounted in a fresh session,
+because the tracking `Map`s start empty every launch — accurate in the
+sense that the failure was real, but misleading in implying it had
+just happened.
+
+**Explicitly out of scope**, stated up front: bandwidth/network
+throughput (see above); a real Commit/Push *action* (git integration
+is read-only this sprint); a true multi-parent workflow dependency
+graph (unchanged from Sprint 11/12's scoping); and file-level
+granularity in the AI Thinking Panel's "Current File" field (agent
+tasks aren't tracked at that resolution).
+
+---
+
 # PLUGIN / EXTENSION ARCHITECTURE (future — not started)
 
 MASTER_SPECIFICATION.md lists "Plugin Marketplace" under FUTURE
@@ -1222,6 +1336,36 @@ must never run with Node.js integration in the renderer.
     (`Get-Process`), matching this app's only packaged target
     (`package.json`'s `build.win`) — returns `null` elsewhere rather
     than a fabricated number.
+41. **(Sprint 13)** Stats/History endpoints (`/stats/performance`,
+    `/stats/tokens`, `/history`) are computed fresh from
+    `agent_tasks`/`ai_messages` on every call, not a maintained running
+    total — appropriate at this app's single-user desktop data volume.
+42. **(Sprint 13)** Token cost is a labeled *estimate* from a small
+    published-pricing table (`app/ai/pricing.py`); a model outside the
+    table reports `null`, never a guessed figure. Ollama is always
+    exactly `$0`.
+43. **(Sprint 13)** The Build Center operates on the currently open
+    *user* project (via a `projectPath` argument), never on NEMI AI
+    STUDIO's own source — a packaged install has no `.git`/
+    `package.json` for its own code, and helping the user build their
+    project is the entire point of this platform.
+44. **(Sprint 13)** "Run Build"/"Run Tests" are only offered when
+    `detectAvailableRunners()` finds a real corresponding script/project
+    marker in the open project — never a button that would just fail.
+45. **(Sprint 13)** Requested-but-not-real telemetry is substituted with
+    an honestly labeled real alternative rather than fabricated: "AI
+    logs" folds into "Backend" logs (Sprint 4 already locked AI/
+    orchestration logging into that same stream); "Network" reports
+    backend connectivity, not bandwidth (no cross-platform throughput
+    API); undelivered pipeline stages (Documentation/Commit/Push) render
+    as explicitly not-yet-automated, not as fake progress.
+46. **(Sprint 13)** Dashboard notifications key their "already seen"
+    tracking per entity (workflow/task id → last known status), not a
+    single "have I loaded yet" flag — an item already in a terminal
+    state when a fresh session's first poll observes it establishes the
+    baseline silently; only a transition witnessed *during* the session
+    notifies. Found and fixed via live testing after an earlier version
+    re-notified for already-failed leftover state on every fresh launch.
 
 ---
 

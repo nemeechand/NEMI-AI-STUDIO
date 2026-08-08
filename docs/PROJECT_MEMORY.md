@@ -436,6 +436,28 @@ Verified: tsc build, eslint (0 warnings), prettier (clean), vite build; pytest (
 
 Known limitation: as in Sprint 11, the tiny local test model's instruction-following for structured output formats (here, `### MILESTONE:` sections) is not fully reliable — an empty parse fails the workflow with a visible error rather than hanging silently, and this exact path is unit-tested; a full live happy-path run (real milestones parsed, pipeline created and started) was also observed directly in this sprint's testing, not only the graceful-failure path. Conflict detection is verified directly (two tasks seeded with an overlapping proposed path) rather than by forcing two live models to collide, which isn't reliably reproducible on demand. Milestone/pipeline chains are linear (one dependency link per task), not a true multi-parent DAG — deliberately out of scope, consistent with Sprint 11's original scoping of `depends_on_task_id`. Resource usage reporting is Windows-only. Code-signing certificate for the installer remains the top Beta blocker, unaffected by this sprint.
 
+Sprint 13 — Completed (Live Development Dashboard & Intelligence Center)
+
+Goal:
+
+Create a real-time operational dashboard for monitoring every AI agent, workflow, sprint, build, test, and project activity from one place: a Live Sprint Center, Live Agent Monitor, Live Workflow View, Live Terminal, AI Thinking Panel, Resource Monitor, Token & Cost Center, Build Center, Pause/Resume Center, Execution History, Notification Center, and Performance Dashboard — integrated with the existing platform, preserving Sprints 1–12.
+
+Delivered:
+
+Backend: `agent_tasks` gained one additive column, `live_output` (flushed by `manager.py`'s streaming loop every 1.5s, cleared on completion/failure/cancellation) — genuine partial model output for the AI Thinking Panel, not fabricated reasoning. `HistoryRepository` gives the schema-ready-since-Sprint-3 `history` table its first real implementation, recording workflow/task lifecycle events from the API/orchestration layer. New `StatsRepository` computes performance stats (success/failure/retry rate, avg task/agent duration, tasks/hour) and token/cost summaries (session/day/month windows, from real `ai_messages` token counts) fresh on every call — no maintained running total, appropriate at this app's data scale. New `app/ai/pricing.py`: a small published-list-pricing table for cost *estimates* (a model outside it reports `null`, never a guess; Ollama is always $0). New `GET /stats/performance`, `/stats/tokens`, `/history`, and `POST /workflows/{id}/restart` (requeues a workflow's failed/cancelled tasks, leaves completed ones alone) endpoints.
+
+Electron: new `git-status.ts` (real branch/ahead-behind/dirty/recent-commits via the `git` CLI, scoped to the *open project*, never NEMI's own source — never throws, reports `isRepo: false` gracefully) and `build-runner.ts` (real `npm run build`/`npm test`/`npx tsc --noEmit` child processes, detected via the open project's actual `package.json` scripts so a button never triggers a command that would just fail, with streamed output and cancellation). New `system-metrics.ts`: real system-wide CPU (sampled via `os.cpus()` tick-diffing, since `os.loadavg()` is always `[0,0,0]` on Windows), RAM, disk (`Get-PSDrive`, Windows-only), and total Electron process memory (`app.getAppMetrics()`).
+
+Frontend: new `intelligence/` Context+Provider+Hook module (`IntelligenceProvider.tsx`) polling stats/git/system-metrics/build-runner-output and deriving real-time notifications from genuine state transitions. New `components/intelligence/` — `IntelligenceCenter.tsx` (a 12-section dashboard replacing the main content area, opened via a new HeaderToolbar button or `Ctrl+Shift+I`) and one component per section, each built on real data: Sprint Center (percentage, phase, ETA, elapsed time, timeline, remaining tasks — auto-following whichever workflow was updated most recently); Agent Monitor (per-role Idle/Running/Waiting/Completed/Failed/Retrying, derived client-side from already-polled task data); Workflow View (the requested Goal→...→Push visual chain, with Documentation/Commit/Push explicitly marked "not yet automated" rather than faked); Terminal (search/filter/export over real backend + build/test output); AI Thinking (live_output plus objective/milestone/dependency/action); Resources; Tokens & Cost; Build Center; Pause/Resume Center (adds Restart Workflow to Sprint 12's existing controls); History; Notifications (persistent list + auto-fading toasts); Performance.
+
+Found and fixed two real bugs during live verification: (1) the Pause button in the new Sprint Center section, same class of bug as Sprint 12's original — fixed by including `'planning'` in scope from the start this time, informed by the Sprint 12 fix. (2) Notifications re-fired for tasks/workflows that had already reached a terminal status in a *previous* session, the instant a fresh dashboard mounted — confirmed live (old "Smoke test: forced failure" tasks from earlier testing surfaced as brand-new "API / Task Error" toasts on a clean launch) — fixed by keying the "already seen" tracking per entity id rather than a single loaded/not-loaded flag, so a status already on record when first observed establishes the baseline silently instead of counting as a transition.
+
+docs/ARCHITECTURE.md gained a new "LIVE DEVELOPMENT DASHBOARD & INTELLIGENCE CENTER (locked — Sprint 13)" section, the IPC namespace list updated to eleven namespaces, six new locked-decision entries, version bumped to 2.0; docs/DATABASE_SCHEMA.md updated with `history`'s first implementation and `agent_tasks.live_output`; docs/SPRINT_13_REPORT.md created.
+
+Verified: tsc build, eslint (0 warnings), prettier (clean), vite build; pytest (86 passed, 14 new), ruff check (all checks passed), mypy strict (0 issues, 46 source files). Live Playwright verification (real Ollama, real git repo, real npm scripts, no mocks): all 12 sections navigated without error; Git Status showed the real branch/last-commit/ahead-behind for this repo; Resource Monitor accurately reflected genuine system load (100% CPU, 96% RAM) while a real `Run Verification` (`npx tsc --noEmit`) executed on the open project, explaining transient IPC timeouts elsewhere as real resource contention, not a defect; Build Center correctly enabled/disabled Run Build/Run Tests based on real `package.json` script detection; a correctly project-scoped workflow populated Sprint Center with real live data; the notification-staleness bug above was found, fixed, and reconfirmed clean on a follow-up run.
+
+Known limitation: "AI logs" (requested as a distinct Live Terminal category) is folded into "Backend" logs since Sprint 4 already locked AI/orchestration logging into that same stream, not a separate one — stated honestly rather than fabricating a fifth log source. "Network" reports backend connectivity, not bandwidth (no cross-platform throughput API). Documentation/Commit/Push pipeline stages have no automation behind them yet (git integration is read-only this sprint) and render as explicitly not-yet-automated. Resource/disk metrics are Windows-only. Code-signing certificate for the installer remains the top Beta blocker, unaffected by this sprint.
+
 ---
 
 # CURRENT STATUS
@@ -638,11 +660,21 @@ Sprint 1 Completed
 
 ✔ Sprint 12 Verified (tsc, eslint, prettier, vite build; pytest ×72 [19 new, incl. a live goal-decomposition Ollama test], ruff, mypy strict; live Playwright verification across multiple runs — manual approval gating, pause-from-planning, resume, cancel cascade, real UI goal creation and Pause click, a full real milestone-decomposition-to-execution happy path observed directly — reproduced clean)
 
+✔ Sprint 13 Completed — Live Development Dashboard & Intelligence Center
+
+✔ 12-Section Live Dashboard Implemented — Sprint Center, Agent Monitor, Workflow View, Terminal, AI Thinking, Resources, Tokens & Cost, Build Center, Pause/Resume, History, Notifications, and Performance, opened via a new HeaderToolbar button or `Ctrl+Shift+I`, every widget backed by real data (no fabricated metrics) with honest labeled substitutes where genuine telemetry doesn't exist (AI logs folded into Backend logs, Network reports connectivity not bandwidth, unautomated pipeline stages marked as such)
+
+✔ Real Git/Build Integration Added — `git-status.ts` (branch/ahead-behind/dirty/commits via the `git` CLI) and `build-runner.ts` (real `npm run build`/`test`/`npx tsc --noEmit`, detected from the open project's actual scripts, streamed output, cancellable) both scoped to the currently open *user* project, never NEMI's own source
+
+✔ Found and Fixed Two Real Bugs During Live Verification — the new Sprint Center's Pause button initially missed the same `'planning'`-state class of bug Sprint 12 fixed once already; and dashboard notifications re-fired for tasks/workflows that had already failed/completed in a *previous* session the instant a fresh session's dashboard mounted (confirmed live), fixed by keying "already seen" tracking per entity id so a pre-existing terminal status only establishes a silent baseline instead of counting as a live transition
+
+✔ Sprint 13 Verified (tsc, eslint, prettier, vite build; pytest ×86 [14 new], ruff, mypy strict; live Playwright verification — all 12 sections navigated without error, real git status for this repo, Resource Monitor accurately reflecting genuine 100% CPU/96% RAM load during a real Run Verification execution, Build Center correctly gating on real npm-script detection, a correctly-scoped workflow populating Sprint Center with live data, notification-staleness bug found/fixed/reconfirmed — reproduced clean)
+
 ---
 
 # PENDING TASKS
 
-Code-signing certificate for the installer (currently unsigned) — top remaining Beta blocker, unaffected by Sprint 12
+Code-signing certificate for the installer (currently unsigned) — top remaining Beta blocker, unaffected by Sprint 13
 
 Workflow Design
 
@@ -650,13 +682,13 @@ Memory Engine (the schema-generic `long_term`/`knowledge`/`project`/`conversatio
 
 Plugin System
 
-Git Integration
+Git Integration (Sprint 13 added real read-only git status/branch/commits; there is still no in-app commit/push *action*)
 
 Testing Engine
 
 Build System
 
-Repositories/business logic for the remaining 2 tables (`tasks`, `settings`) plus the still-generic `history` audit table — schema exists, repositories deferred to the sprints that need them; `projects` (Sprint 7), `ai_conversations`/`ai_messages` (Sprint 10), `agents`/`agent_tasks`/`memory` (Sprint 11), and `workflows`/`milestones` (Sprint 12) now have repositories; `files` table remains intentionally unused (file content always comes from disk)
+Repositories/business logic for the remaining 2 tables (`tasks`, `settings`) — schema exists, repositories deferred to the sprints that need them; `projects` (Sprint 7), `ai_conversations`/`ai_messages` (Sprint 10), `agents`/`agent_tasks`/`memory` (Sprint 11), `workflows`/`milestones` (Sprint 12), and `history` (Sprint 13) now have repositories; `files` table remains intentionally unused (file content always comes from disk)
 
 Resizable/drag panel splitters (sidebar and logger panel are currently show/hide toggles only)
 
@@ -666,7 +698,11 @@ Only four of the eight `agents/*.md` roles (planner/developer/reviewer/tester) a
 
 Milestone/pipeline dependency chains are linear (one link per task), not a true multi-parent dependency graph — deliberately out of scope since Sprint 11
 
-Resource usage reporting (Sprint 12) is Windows-only, matching this app's only packaged target
+Resource/disk usage reporting (Sprint 12/13) is Windows-only, matching this app's only packaged target
+
+Network throughput/bandwidth is not shown (Sprint 13) — no cross-platform API this app relies on exposes it; connectivity status is shown instead
+
+Documentation/Commit/Push pipeline stages have no automation behind them yet (Sprint 13's Live Workflow View marks them explicitly as not-yet-automated)
 
 ---
 
@@ -834,17 +870,21 @@ Sprint 11 Completed — Agent Orchestration Framework: builds the first producti
 
 Sprint 12 Completed — Workflow Engine & AI Project Manager: builds an autonomous AI Project Manager on Sprint 11's Agent Orchestration Framework — a high-level goal is decomposed (reusing the existing Planner role, run through the same `run_cycle()`, not a new execution path) into an ordered list of milestones, each its own full Planner/Developer/Reviewer/Tester pipeline chained sequentially across the workflow; new `workflows`/`milestones` tables and six additive `agent_tasks` columns (none touching the existing `status` CHECK constraint); Pause/Resume implemented by filtering the scheduler rather than touching task status; Human Approval Mode (Fully Automatic/Review Before Apply/Manual Approval) gates on new `requires_approval`/`approved_at` columns; Auto Resume after restart requeues any task orphaned `'running'` at startup; a Sprint Progress Center (percentage, counters, current agent, ETA, logs, real Windows backend resource usage); conflict detection flags overlapping Developer-proposed file paths across a workflow; found and fixed one real bug during live UI verification (the Pause button didn't appear while a workflow was still `'planning'`, even though pausing was already supported from that state) — verified via live Playwright testing across multiple runs including a full real goal-decomposition-to-milestone-execution happy path, plus the full offline suite; resolves the autonomous project management work Sprint 11 explicitly deferred
 
+Sprint 13 Completed — Live Development Dashboard & Intelligence Center: a real-time operational dashboard (12 sections: Sprint Center, Agent Monitor, Workflow View, Terminal, AI Thinking, Resources, Tokens & Cost, Build Center, Pause/Resume, History, Notifications, Performance) opened via a new HeaderToolbar button or `Ctrl+Shift+I`, every widget backed by real data with honest labeled substitutes wherever genuine telemetry doesn't exist (AI logs folded into Backend logs, Network shows connectivity not bandwidth, unautomated pipeline stages marked as such rather than faked); new real git integration (branch/ahead-behind/commits, scoped to the open user project, never NEMI's own source) and build/test runner (detected from the project's actual npm/Python scripts, streamed output, cancellable); `agent_tasks` gained a `live_output` column (genuine partial streamed model output, not fabricated reasoning) and `history` got its first real implementation since being schema-ready since Sprint 3; found and fixed two real bugs during live verification (the new Sprint Center's Pause button missing the same `'planning'`-state case Sprint 12 fixed once already, and notifications re-firing for already-terminal tasks/workflows left over from a previous session on a fresh mount — fixed by keying "already seen" tracking per entity id) — verified via live Playwright testing against this repo's own real git state and a real `npx tsc --noEmit` run, plus the full offline suite; resolves the operational-visibility work implied by Sprints 11/12's growing agent/workflow surface
+
 ---
 
 # NEXT MILESTONE
 
-Sprint 13
+Sprint 14
 
-Code-signing certificate for the installer — still the top remaining Beta blocker, unaffected by Sprint 12
+Code-signing certificate for the installer — still the top remaining Beta blocker, unaffected by Sprint 13
 
 True concurrent multi-project support (simultaneous open projects, not just switching) — deliberately deferred in Sprint 7; would require a per-project filesystem watcher map and a multi-root Explorer UI
 
 Wiring the remaining four `agents/*.md` roles (architect, debugger, etc.) into the orchestration queue, and/or a richer dependency model beyond a single linear chain per pipeline — Sprint 11/12 deliberately scoped to the four core roles and linear chains only
+
+An in-app git commit/push action (Sprint 13 added read-only git status only) — would let the Live Workflow View's Documentation/Commit/Push nodes become genuinely automated instead of marked not-yet-automated
 
 ---
 

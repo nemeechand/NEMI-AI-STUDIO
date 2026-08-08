@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from typing import Any
 
 from app.ai.agent_roles import load_agent_roles
@@ -20,9 +21,16 @@ from app.db.repositories.agent_tasks_repository import AgentTasksRepository, Tas
 from app.db.repositories.agents_repository import AgentsRepository
 from app.db.repositories.ai_conversations_repository import ConversationsRepository
 from app.db.repositories.ai_messages_repository import MessagesRepository
+from app.db.repositories.history_repository import HistoryRepository
 from app.db.repositories.memory_repository import MemoryRepository
 from app.db.repositories.milestones_repository import MilestonesRepository, MilestoneStatus
 from app.db.repositories.workflows_repository import WorkflowsRepository
+
+# Sprint 13: how often (seconds) a running task's accumulated streamed
+# text is flushed to `agent_tasks.live_output` for the AI Thinking Panel
+# — frequent enough to feel "live", infrequent enough not to turn every
+# token into its own SQLite write.
+LIVE_OUTPUT_FLUSH_INTERVAL_SECONDS = 1.5
 
 logger = get_logger("ai.orchestration")
 
@@ -100,6 +108,7 @@ async def _run_task(settings: Settings, task_id: str, api_keys: dict[str, str]) 
 def _handle_failure(settings: Settings, task_id: str, message: str) -> None:
     with get_connection(settings) as connection:
         tasks_repo = AgentTasksRepository(connection)
+        task = tasks_repo.get(task_id)
         next_status: TaskStatus = tasks_repo.mark_failed_or_retry(task_id, error_message=message)
         if next_status == "failed":
             cancelled = tasks_repo.cascade_cancel_dependents(task_id)
@@ -109,6 +118,20 @@ def _handle_failure(settings: Settings, task_id: str, message: str) -> None:
                     task_id,
                     len(cancelled),
                     cancelled,
+                )
+            if task is not None:
+                HistoryRepository(connection).record(
+                    project_id=task["project_id"],
+                    entity_type="agent_task",
+                    entity_id=task_id,
+                    action="updated",
+                    snapshot={
+                        "status": "failed",
+                        "title": task["title"],
+                        "agent_role": task["agent_role"],
+                        "error_message": message,
+                        "dependents_cancelled": cancelled,
+                    },
                 )
 
 
@@ -175,11 +198,19 @@ async def _execute(settings: Settings, task: dict[str, Any], api_keys: dict[str,
     ]
     accumulated: list[str] = []
     usage = TokenUsage()
+    last_flush = time.monotonic()
     async for event in provider.stream_chat(
         messages=chat_messages, model=task["model"], api_key=api_key
     ):
         if isinstance(event, StreamChunk):
             accumulated.append(event.delta)
+            now = time.monotonic()
+            if now - last_flush >= LIVE_OUTPUT_FLUSH_INTERVAL_SECONDS:
+                last_flush = now
+                with get_connection(settings) as connection:
+                    AgentTasksRepository(connection).update_live_output(
+                        task["id"], "".join(accumulated)
+                    )
         elif isinstance(event, StreamDone):
             usage = event.usage
 
@@ -312,12 +343,14 @@ def _sync_workflow_progress(settings: Settings, workflow_id: str) -> None:
         all_statuses = {t["status"] for t in tasks}
         if all_statuses <= {"completed"}:
             workflows_repo.set_status(workflow_id, "completed")
+            _record_workflow_history(connection, workflow, "completed")
         elif "failed" in all_statuses:
             workflows_repo.set_status(
                 workflow_id,
                 "failed",
                 error_message="One or more milestone tasks failed permanently.",
             )
+            _record_workflow_history(connection, workflow, "failed")
         elif "running" in all_statuses or "completed" in all_statuses:
             if workflow["status"] != "paused":
                 workflows_repo.set_status(workflow_id, "running")
@@ -325,3 +358,13 @@ def _sync_workflow_progress(settings: Settings, workflow_id: str) -> None:
             workflows_repo.set_status(workflow_id, "cancelled")
         elif "queued" in all_statuses and workflow["status"] == "planning":
             workflows_repo.set_status(workflow_id, "queued")
+
+
+def _record_workflow_history(connection: Any, workflow: dict[str, Any], new_status: str) -> None:
+    HistoryRepository(connection).record(
+        project_id=workflow["project_id"],
+        entity_type="workflow",
+        entity_id=workflow["id"],
+        action="updated",
+        snapshot={"status": new_status, "title": workflow["title"], "goal": workflow["goal"]},
+    )

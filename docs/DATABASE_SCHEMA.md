@@ -1,7 +1,7 @@
 # DATABASE_SCHEMA.md
 
-Version: 1.5
-Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4); `projects` Repository Implemented (Sprint 7); `ai_conversations`/`ai_messages` Added and Implemented (Sprint 10); `agent_tasks` Added and `memory` Repository Implemented (Sprint 11); `workflows`/`milestones` Added and `agent_tasks` Extended (Sprint 12)
+Version: 1.6
+Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4); `projects` Repository Implemented (Sprint 7); `ai_conversations`/`ai_messages` Added and Implemented (Sprint 10); `agent_tasks` Added and `memory` Repository Implemented (Sprint 11); `workflows`/`milestones` Added and `agent_tasks` Extended (Sprint 12); `history` Repository Implemented and `agent_tasks.live_output` Added (Sprint 13)
 Engine: SQLite
 
 ---
@@ -157,6 +157,22 @@ get their own table rather than overloading this one.
 
 Append-only audit trail. Never updated or deleted by application code.
 
+**First real implementation: Sprint 13's Execution History.**
+`HistoryRepository.record()`/`list_recent()`
+(`backend/app/db/repositories/history_repository.py`) back the
+`GET /history` endpoint. `entity_type` is `'workflow'` or
+`'agent_task'` in practice so far; `action` stays within the
+table's original three-value CHECK constraint — a workflow reaching
+`'completed'` is recorded as `action='updated'` with
+`snapshot={"status": "completed", ...}`, not a fourth action value,
+since this table predates Sprint 13 and CHECK constraints can't be
+altered in place (same reasoning as `agent_tasks`'s `status` column,
+Sprint 12). Recorded from the API/orchestration layer at the point of
+a real state change (workflow create/pause/resume/cancel/restart in
+`app/api/workflows.py`, permanent task failure and workflow terminal
+transitions in `app/ai/orchestration/manager.py`), not inside the
+entity repositories themselves.
+
 ## ai_conversations (Sprint 10)
 
 | Column     | Type | Constraints           | Notes                                    |
@@ -229,6 +245,7 @@ Index: `idx_ai_messages_conversation_id` on `conversation_id`.
 | approved_at         | TEXT    | (Sprint 12)                                                           | nullable — set by `POST /agents/tasks/{id}/approve` |
 | proposed_files_applied | INTEGER | (Sprint 12) NOT NULL DEFAULT 0                                     | boolean (0/1) — set once `proposed_files` has actually been written to disk (manually via Apply, or automatically under Fully Automatic mode), so a reload doesn't lose that state |
 | conflict_warning    | TEXT    | (Sprint 12)                                                           | nullable — set when another task in the same workflow proposed an overlapping file path (see ARCHITECTURE.md's conflict detection) |
+| live_output         | TEXT    | (Sprint 13)                                                           | nullable — the accumulated-so-far streamed text of a currently `running` task, flushed periodically (not per-chunk); the Live Development Dashboard's AI Thinking Panel data source; cleared to NULL on completion/failure/cancellation |
 | created_at          | TEXT    | NOT NULL                                                              |                                                    |
 | updated_at          | TEXT    | NOT NULL                                                              |                                                    |
 | started_at          | TEXT    |                                                                        | nullable                                          |
@@ -306,7 +323,7 @@ agents   (standalone, referenced by tasks.agent as a name, not a FK —
 
 ---
 
-# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7, Sprint 10, Sprint 11, Sprint 12)
+# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7, Sprint 10, Sprint 11, Sprint 12, Sprint 13)
 
 - Schema implemented exactly as designed above:
   `backend/app/db/schema.py::SCHEMA_STATEMENTS` /  `init_db()`.
@@ -328,22 +345,33 @@ agents   (standalone, referenced by tasks.agent as a name, not a FK —
   `AgentTasksRepository` (full CRUD plus the scheduling queries
   `list_runnable()`/`mark_failed_or_retry()`/
   `cascade_cancel_dependents()`, extended in Sprint 12 with
-  `approve()`/`mark_files_applied()`/`requeue_orphaned_running_tasks()`),
-  and `MemoryRepository` (`memory`'s first real implementation) back
-  the `GET/POST /logs`,
+  `approve()`/`mark_files_applied()`/`requeue_orphaned_running_tasks()`
+  and in Sprint 13 with `update_live_output()`/
+  `reset_tasks_for_workflow()`), and `MemoryRepository` (`memory`'s
+  first real implementation) back the `GET/POST /logs`,
   `GET /projects/recent`/`POST /projects/opened`/`DELETE /projects/{id}`,
   `/ai/conversations*`, and `/agents*` APIs respectively. As of
   Sprint 12, `WorkflowsRepository` and `MilestonesRepository` back the
-  new `/workflows*` API. The remaining two tables (`tasks`, `settings`)
-  plus the still-generic `history` table are schema-ready but
-  intentionally have no repository or business logic yet; those arrive
-  with the sprints that actually need them, per the Planner principle
-  "database before business logic" — the schema had to exist first,
-  but a table being queryable doesn't mean its feature is built. Note
-  `tasks` (Sprint 3 design, generic project task tracking) is distinct
-  from Sprint 11's `agent_tasks` (agent pipeline scheduling) and
-  Sprint 12's `workflows` (AI Project Manager goals) — different
-  tables for different concerns, not a rename.
+  `/workflows*` API. As of Sprint 13, `HistoryRepository` (`history`'s
+  first real implementation) backs `GET /history`, and
+  `StatsRepository` (a cross-table read-only aggregator, not tied to
+  one table the way every other repository is) backs
+  `/stats/performance`/`/stats/tokens`. The remaining two tables
+  (`tasks`, `settings`) are schema-ready but intentionally have no
+  repository or business logic yet; those arrive with the sprints that
+  actually need them, per the Planner principle "database before
+  business logic" — the schema had to exist first, but a table being
+  queryable doesn't mean its feature is built. Note `tasks` (Sprint 3
+  design, generic project task tracking) is distinct from Sprint 11's
+  `agent_tasks` (agent pipeline scheduling) and Sprint 12's
+  `workflows` (AI Project Manager goals) — different tables for
+  different concerns, not a rename.
+- **`history` went from schema-ready to genuinely implemented this
+  sprint (Sprint 13)**, its first real use since being designed in
+  Sprint 3 — see the `history` table section above.
+  `agent_tasks` gained one further additive column, `live_output`
+  (also see above), continuing the same no-CHECK-constraint-changes
+  discipline Sprint 12 established for this table.
 - **`workflows`/`milestones` are new tables added this sprint
   (Sprint 12)**, for the same reason `agent_tasks` was added in
   Sprint 11: a workflow's own lifecycle (`planning` → ... →

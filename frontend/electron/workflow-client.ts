@@ -101,3 +101,7 @@ export function resumeWorkflow(workflowId: string): Promise<Workflow> {
 export function cancelWorkflow(workflowId: string): Promise<Workflow> {
   return requestJson(`/workflows/${encodeURIComponent(workflowId)}/cancel`, { method: 'POST' });
 }
+
+export function restartWorkflow(workflowId: string): Promise<Workflow> {
+  return requestJson(`/workflows/${encodeURIComponent(workflowId)}/restart`, { method: 'POST' });
+}

@@ -8,6 +8,7 @@ from app.api.schemas import WorkflowCreate, WorkflowDetailOut, WorkflowOut
 from app.core.config import get_settings
 from app.db.connection import get_connection
 from app.db.repositories.agent_tasks_repository import AgentTasksRepository
+from app.db.repositories.history_repository import HistoryRepository
 from app.db.repositories.milestones_repository import MilestonesRepository
 from app.db.repositories.workflows_repository import WorkflowsRepository
 
@@ -67,6 +68,13 @@ def create_workflow(payload: WorkflowCreate) -> dict[str, Any]:
             milestone_id=None,
             requires_approval=payload.approval_mode == "manual",
         )
+        HistoryRepository(connection).record(
+            project_id=payload.project_id,
+            entity_type="workflow",
+            entity_id=workflow["id"],
+            action="created",
+            snapshot={"title": payload.title, "goal": payload.goal},
+        )
     return workflow
 
 
@@ -77,7 +85,9 @@ def pause_workflow(workflow_id: str) -> dict[str, Any]:
         repo = WorkflowsRepository(connection)
         if not repo.pause(workflow_id):
             raise HTTPException(status_code=404, detail="Workflow not found or not pausable")
-        return repo.get(workflow_id)  # type: ignore[return-value]
+        workflow = repo.get(workflow_id)
+        _record(connection, workflow, "paused")
+        return workflow  # type: ignore[return-value]
 
 
 @router.post("/{workflow_id}/resume", response_model=WorkflowOut)
@@ -87,7 +97,9 @@ def resume_workflow(workflow_id: str) -> dict[str, Any]:
         repo = WorkflowsRepository(connection)
         if not repo.resume(workflow_id):
             raise HTTPException(status_code=404, detail="Workflow not found or not paused")
-        return repo.get(workflow_id)  # type: ignore[return-value]
+        workflow = repo.get(workflow_id)
+        _record(connection, workflow, "resumed")
+        return workflow  # type: ignore[return-value]
 
 
 @router.post("/{workflow_id}/cancel", response_model=WorkflowOut)
@@ -108,4 +120,40 @@ def cancel_workflow(workflow_id: str) -> dict[str, Any]:
         for task in tasks_repo.list_for_workflow(workflow_id):
             if task["status"] == "queued":
                 tasks_repo.cancel(task["id"])
-        return workflows_repo.get(workflow_id)  # type: ignore[return-value]
+        workflow = workflows_repo.get(workflow_id)
+        _record(connection, workflow, "cancelled")
+        return workflow  # type: ignore[return-value]
+
+
+@router.post("/{workflow_id}/restart", response_model=WorkflowOut)
+def restart_workflow(workflow_id: str) -> dict[str, Any]:
+    """Pause/Resume Center's "Restart Workflow": every failed/cancelled
+    task in the workflow goes back to `queued` (completed tasks are left
+    alone — a restart doesn't redo work that already succeeded), and the
+    workflow itself goes back to `'queued'` so `run_cycle()` picks it
+    back up on the next pass."""
+    settings = get_settings()
+    with get_connection(settings) as connection:
+        workflows_repo = WorkflowsRepository(connection)
+        workflow = workflows_repo.get(workflow_id)
+        if workflow is None or workflow["status"] not in ("failed", "cancelled"):
+            raise HTTPException(
+                status_code=404, detail="Workflow not found or not in a restartable state"
+            )
+        AgentTasksRepository(connection).reset_tasks_for_workflow(workflow_id)
+        workflows_repo.set_status(workflow_id, "queued")
+        workflow = workflows_repo.get(workflow_id)
+        _record(connection, workflow, "restarted")
+        return workflow  # type: ignore[return-value]
+
+
+def _record(connection: Any, workflow: dict[str, Any] | None, action_label: str) -> None:
+    if workflow is None:
+        return
+    HistoryRepository(connection).record(
+        project_id=workflow["project_id"],
+        entity_type="workflow",
+        entity_id=workflow["id"],
+        action="updated",
+        snapshot={"status": action_label, "title": workflow["title"]},
+    )

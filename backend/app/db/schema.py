@@ -254,4 +254,10 @@ def init_db(connection: sqlite3.Connection) -> None:
         connection, "agent_tasks", "proposed_files_applied", "INTEGER NOT NULL DEFAULT 0"
     )
     _add_column_if_missing(connection, "agent_tasks", "conflict_warning", "TEXT")
+    # Sprint 13: the accumulated-so-far streamed text of a currently
+    # `running` task, flushed periodically (not per-chunk — see
+    # manager.py) so the AI Thinking Panel can show genuine in-progress
+    # model output rather than fabricated "reasoning". Cleared back to
+    # NULL once the task completes (result_summary takes over).
+    _add_column_if_missing(connection, "agent_tasks", "live_output", "TEXT")
     connection.commit()

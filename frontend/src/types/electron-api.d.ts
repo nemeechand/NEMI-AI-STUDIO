@@ -149,6 +149,7 @@ declare global {
     approved_at: string | null;
     proposed_files_applied: boolean;
     conflict_warning: string | null;
+    live_output: string | null;
     created_at: string;
     updated_at: string;
     started_at: string | null;
@@ -196,6 +197,88 @@ declare global {
   interface ResourceUsage {
     memoryMb: number;
     cpuPercent: number | null;
+  }
+
+  interface SystemMetrics {
+    cpu: { usedPercent: number | null; cores: number };
+    memory: { totalMb: number; freeMb: number; usedPercent: number };
+    disk: { totalMb: number | null; freeMb: number | null; usedPercent: number | null };
+    electronMemoryMb: number;
+  }
+
+  interface GitCommit {
+    hash: string;
+    message: string;
+    author: string;
+    date: string;
+  }
+
+  interface GitStatus {
+    isRepo: boolean;
+    branch: string | null;
+    isDirty: boolean;
+    ahead: number | null;
+    behind: number | null;
+    lastCommit: GitCommit | null;
+    recentCommits: GitCommit[];
+  }
+
+  type RunnerId = 'build' | 'test' | 'verify';
+  type RunnerState = 'idle' | 'running' | 'success' | 'failed' | 'cancelled';
+
+  interface RunnerOutputEvent {
+    runnerId: RunnerId;
+    stream: 'stdout' | 'stderr';
+    chunk: string;
+  }
+
+  interface RunnerStatusEvent {
+    runnerId: RunnerId;
+    state: RunnerState;
+    exitCode: number | null;
+  }
+
+  interface AvailableRunners {
+    build: boolean;
+    test: boolean;
+  }
+
+  interface PerformanceStats {
+    total_tasks: number;
+    completed_tasks: number;
+    failed_tasks: number;
+    success_rate: number | null;
+    failure_rate: number | null;
+    retry_rate: number | null;
+    avg_task_seconds: number | null;
+    avg_agent_seconds: Record<string, number | null>;
+    tasks_completed_last_hour: number;
+  }
+
+  interface TokenWindowStats {
+    by_provider: Record<
+      string,
+      { prompt_tokens: number; completion_tokens: number; estimated_cost_usd: number | null }
+    >;
+    total_prompt_tokens: number;
+    total_completion_tokens: number;
+    total_estimated_cost_usd: number | null;
+  }
+
+  interface TokenStats {
+    session: TokenWindowStats;
+    day: TokenWindowStats;
+    month: TokenWindowStats;
+  }
+
+  interface HistoryEntry {
+    id: string;
+    project_id: string | null;
+    entity_type: string;
+    entity_id: string;
+    action: 'created' | 'updated' | 'deleted';
+    snapshot: Record<string, unknown>;
+    created_at: string;
   }
 
   interface Window {
@@ -298,9 +381,27 @@ declare global {
         pause: (workflowId: string) => Promise<Workflow>;
         resume: (workflowId: string) => Promise<Workflow>;
         cancel: (workflowId: string) => Promise<Workflow>;
+        restart: (workflowId: string) => Promise<Workflow>;
       };
       system: {
         getResourceUsage: () => Promise<ResourceUsage | null>;
+        getMetrics: (projectPath: string) => Promise<SystemMetrics>;
+      };
+      git: {
+        getStatus: (projectPath: string) => Promise<GitStatus>;
+      };
+      build: {
+        detectRunners: (projectPath: string) => Promise<AvailableRunners>;
+        runBuild: (projectPath: string) => Promise<RunnerStatusEvent>;
+        runTests: (projectPath: string) => Promise<RunnerStatusEvent>;
+        runVerification: (projectPath: string) => Promise<RunnerStatusEvent>;
+        cancelRunner: (runnerId: RunnerId) => Promise<boolean>;
+        onOutput: (callback: (event: RunnerOutputEvent) => void) => () => void;
+      };
+      stats: {
+        getPerformance: (projectId: string | null) => Promise<PerformanceStats>;
+        getTokens: () => Promise<TokenStats>;
+        getHistory: (projectId: string | null, limit?: number) => Promise<HistoryEntry[]>;
       };
     };
   }

@@ -60,9 +60,21 @@ import {
   getWorkflow,
   listWorkflows,
   pauseWorkflow,
+  restartWorkflow,
   resumeWorkflow,
   type ApprovalMode,
 } from './workflow-client';
+import { getGitStatus } from './git-status';
+import {
+  cancelRunner,
+  detectAvailableRunners,
+  runBuild,
+  runTests,
+  runVerification,
+  type RunnerId,
+} from './build-runner';
+import { getSystemMetrics } from './system-metrics';
+import { getHistory, getPerformanceStats, getTokenStats } from './stats-client';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -271,8 +283,39 @@ ipcMain.handle(
 ipcMain.handle('workflows:pause', (_event, workflowId: string) => pauseWorkflow(workflowId));
 ipcMain.handle('workflows:resume', (_event, workflowId: string) => resumeWorkflow(workflowId));
 ipcMain.handle('workflows:cancel', (_event, workflowId: string) => cancelWorkflow(workflowId));
+ipcMain.handle('workflows:restart', (_event, workflowId: string) => restartWorkflow(workflowId));
 
 ipcMain.handle('system:resource-usage', () => getBackendResourceUsage());
+ipcMain.handle('system:get-metrics', (_event, projectPath: string) =>
+  getSystemMetrics(projectPath),
+);
+
+ipcMain.handle('git:status', (_event, projectPath: string) => getGitStatus(projectPath));
+
+ipcMain.handle('build:detect-runners', (_event, projectPath: string) =>
+  detectAvailableRunners(projectPath),
+);
+function runnerOutput(event: { runnerId: RunnerId; stream: string; chunk: string }): void {
+  mainWindow?.webContents.send('build:output', event);
+}
+ipcMain.handle('build:run', async (_event, projectPath: string) =>
+  runBuild(projectPath, runnerOutput),
+);
+ipcMain.handle('build:test', async (_event, projectPath: string) =>
+  runTests(projectPath, runnerOutput),
+);
+ipcMain.handle('build:verify', async (_event, projectPath: string) =>
+  runVerification(projectPath, runnerOutput),
+);
+ipcMain.handle('build:cancel', (_event, runnerId: RunnerId) => cancelRunner(runnerId));
+
+ipcMain.handle('stats:performance', (_event, projectId: string | null) =>
+  getPerformanceStats(projectId),
+);
+ipcMain.handle('stats:tokens', () => getTokenStats());
+ipcMain.handle('stats:history', (_event, projectId: string | null, limit?: number) =>
+  getHistory(projectId, limit),
+);
 
 const AGENT_RUN_CYCLE_INTERVAL_MS = 4_000;
 const AGENT_CYCLE_PROVIDERS: ProviderId[] = ['openai', 'anthropic', 'gemini'];

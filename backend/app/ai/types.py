@@ -31,3 +31,13 @@ class StreamDone:
     before the provider's async generator ends."""
 
     usage: TokenUsage
+
+
+@dataclass(frozen=True)
+class ConnectionTestResult:
+    """Sprint 15.5's real "Test Connection" action — `ok`/`message` from
+    an actual network call to the provider (a cheap real signal like a
+    models-list call, never a fabricated ping), never guessed."""
+
+    ok: bool
+    message: str

@@ -14,7 +14,7 @@ from app.ai.errors import (
     RateLimitError,
 )
 from app.ai.providers.base import AIProvider
-from app.ai.types import ChatMessage, StreamChunk, StreamDone, TokenUsage
+from app.ai.types import ChatMessage, ConnectionTestResult, StreamChunk, StreamDone, TokenUsage
 
 MAX_TOKENS = 4096
 
@@ -36,9 +36,18 @@ def _to_anthropic_messages(messages: list[ChatMessage]) -> list[MessageParam]:
 class AnthropicProvider(AIProvider):
     id = "anthropic"
     display_name = "Claude (Anthropic)"
+    # Sprint 15.5: the Anthropic SDK does accept a base_url override (e.g.
+    # for an Anthropic-compatible proxy), so this is honestly supported,
+    # not just accepted-and-ignored like a provider with no such concept.
+    supports_base_url = True
 
     async def stream_chat(
-        self, *, messages: list[ChatMessage], model: str, api_key: str | None
+        self,
+        *,
+        messages: list[ChatMessage],
+        model: str,
+        api_key: str | None,
+        base_url: str | None = None,
     ) -> AsyncIterator[StreamChunk | StreamDone]:
         if not api_key:
             raise MissingApiKeyError("No Anthropic API key configured. Add one in Settings.")
@@ -47,7 +56,7 @@ class AnthropicProvider(AIProvider):
         conversation = _to_anthropic_messages(messages)
         system = "\n\n".join(system_parts) if system_parts else anthropic.omit
 
-        client = AsyncAnthropic(api_key=api_key)
+        client = AsyncAnthropic(api_key=api_key, base_url=base_url or None)
         try:
             async with client.messages.stream(
                 model=model,
@@ -74,5 +83,38 @@ class AnthropicProvider(AIProvider):
             raise ProviderNetworkError(f"Could not reach Anthropic: {exc}") from exc
         except anthropic.APIStatusError as exc:
             raise InvalidRequestError(f"Anthropic returned an error: {exc}") from exc
+        finally:
+            await client.close()
+
+    async def test_connection(
+        self, *, api_key: str | None, base_url: str | None = None
+    ) -> ConnectionTestResult:
+        if not api_key:
+            return ConnectionTestResult(ok=False, message="No API key configured.")
+        client = AsyncAnthropic(api_key=api_key, base_url=base_url or None)
+        try:
+            models = await client.models.list()
+            count = len(models.data)
+            return ConnectionTestResult(ok=True, message=f"Connected — {count} model(s) available.")
+        except anthropic.AuthenticationError as exc:
+            return ConnectionTestResult(ok=False, message=f"Authentication failed: {exc}")
+        except anthropic.APIConnectionError as exc:
+            return ConnectionTestResult(ok=False, message=f"Could not reach the server: {exc}")
+        except Exception as exc:  # a connection test must never raise
+            return ConnectionTestResult(ok=False, message=f"Connection test failed: {exc}")
+        finally:
+            await client.close()
+
+    async def list_models(
+        self, *, api_key: str | None, base_url: str | None = None
+    ) -> list[str]:
+        if not api_key:
+            return []
+        client = AsyncAnthropic(api_key=api_key, base_url=base_url or None)
+        try:
+            models = await client.models.list()
+            return sorted(m.id for m in models.data)
+        except Exception:
+            return []
         finally:
             await client.close()

@@ -40,12 +40,14 @@ def _create_conversation(client: TestClient, **overrides: Any) -> dict[str, Any]
     return response.json()  # type: ignore[no-any-return]
 
 
-def test_list_providers_returns_all_four(client: TestClient) -> None:
+def test_list_providers_returns_all_seven(client: TestClient) -> None:
     response = client.get("/ai/providers")
 
     assert response.status_code == 200
     ids = {p["id"] for p in response.json()}
-    assert ids == {"openai", "anthropic", "gemini", "ollama"}
+    # Sprint 15.5: openai/anthropic/gemini/ollama plus deepseek/grok/custom
+    # (the latter three share the OpenAI-compatible wire protocol).
+    assert ids == {"openai", "anthropic", "gemini", "ollama", "deepseek", "grok", "custom"}
     by_id = {p["id"]: p for p in response.json()}
     assert by_id["ollama"]["requires_api_key"] is False
     assert by_id["openai"]["requires_api_key"] is True

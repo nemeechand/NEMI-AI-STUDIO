@@ -43,6 +43,22 @@ import {
   type AiContextRefInput,
 } from './ai-client';
 import {
+  clearAgentProviderDefault,
+  deleteOllamaModel,
+  getOllamaStatus,
+  getProviderDashboard,
+  getProviderSettings,
+  listAgentProviderDefaults,
+  listFavoriteModels,
+  listProviderSettings,
+  pullOllamaModel,
+  refreshProviderModels,
+  setAgentProviderDefault,
+  setFavoriteModel,
+  testProviderConnection,
+  updateProviderSettings,
+} from './providers-client';
+import {
   approveAgentTask,
   cancelAgentTask,
   createAgentPipeline,
@@ -244,6 +260,7 @@ ipcMain.handle(
       content: string;
       provider: string;
       model: string;
+      baseUrl?: string | null;
       contextRefs?: AiContextRefInput[];
     },
   ) => {
@@ -254,6 +271,65 @@ ipcMain.handle(
   },
 );
 ipcMain.handle('ai:cancel-message', (_event, requestId: string) => cancelMessageStream(requestId));
+
+// Sprint 15.5: AI Provider Management. Settings CRUD, model favorites,
+// Ollama management, and the dashboard aggregation all go straight to the
+// backend (no secrets involved). Only `providers:test-connection` needs
+// main-process involvement — it's the one call that needs the real
+// decrypted API key, which the renderer must never see.
+ipcMain.handle('providers:list-settings', () => listProviderSettings());
+ipcMain.handle('providers:get-settings', (_event, providerId: string) =>
+  getProviderSettings(providerId),
+);
+ipcMain.handle(
+  'providers:update-settings',
+  (
+    _event,
+    providerId: string,
+    update: { enabled?: boolean; baseUrl?: string | null; defaultModel?: string | null },
+  ) => updateProviderSettings(providerId, update),
+);
+ipcMain.handle(
+  'providers:test-connection',
+  async (_event, providerId: string, baseUrl: string | null) => {
+    const apiKey = await getApiKey(providerId as ProviderId);
+    return testProviderConnection(providerId, { apiKey, baseUrl });
+  },
+);
+ipcMain.handle(
+  'providers:refresh-models',
+  async (_event, providerId: string, baseUrl: string | null) => {
+    const apiKey = await getApiKey(providerId as ProviderId);
+    return refreshProviderModels(providerId, { apiKey, baseUrl });
+  },
+);
+ipcMain.handle('providers:list-favorites', (_event, providerId: string) =>
+  listFavoriteModels(providerId),
+);
+ipcMain.handle(
+  'providers:set-favorite',
+  (_event, providerId: string, modelId: string, favorite: boolean) =>
+    setFavoriteModel(providerId, modelId, favorite),
+);
+ipcMain.handle('providers:get-dashboard', () => getProviderDashboard());
+ipcMain.handle('providers:ollama-status', (_event, baseUrl?: string | null) =>
+  getOllamaStatus(baseUrl),
+);
+ipcMain.handle('providers:ollama-pull', (_event, model: string, baseUrl?: string | null) =>
+  pullOllamaModel(model, baseUrl),
+);
+ipcMain.handle('providers:ollama-delete', (_event, model: string, baseUrl?: string | null) =>
+  deleteOllamaModel(model, baseUrl),
+);
+ipcMain.handle('providers:list-agent-defaults', () => listAgentProviderDefaults());
+ipcMain.handle(
+  'providers:set-agent-default',
+  (_event, agentRole: string, provider: string, model: string) =>
+    setAgentProviderDefault(agentRole, provider, model),
+);
+ipcMain.handle('providers:clear-agent-default', (_event, agentRole: string) =>
+  clearAgentProviderDefault(agentRole),
+);
 
 ipcMain.handle('agents:list', () => listAgents());
 ipcMain.handle('agents:list-tasks', (_event, projectId: string | null) =>
@@ -401,7 +477,14 @@ ipcMain.handle(
 );
 
 const AGENT_RUN_CYCLE_INTERVAL_MS = 4_000;
-const AGENT_CYCLE_PROVIDERS: ProviderId[] = ['openai', 'anthropic', 'gemini'];
+const AGENT_CYCLE_PROVIDERS: ProviderId[] = [
+  'openai',
+  'anthropic',
+  'gemini',
+  'deepseek',
+  'grok',
+  'custom',
+];
 let agentCycleTimer: ReturnType<typeof setInterval> | null = null;
 
 /**

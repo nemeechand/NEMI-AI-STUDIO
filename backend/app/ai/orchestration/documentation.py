@@ -9,9 +9,13 @@ from app.ai.registry import get_provider
 from app.ai.types import ChatMessage, StreamChunk, StreamDone, TokenUsage
 from app.core.config import Settings
 from app.core.logging import get_logger
+from app.db.repositories.agent_provider_defaults_repository import (
+    AgentProviderDefaultsRepository,
+)
 from app.db.repositories.agents_repository import AgentsRepository
 from app.db.repositories.ai_conversations_repository import ConversationsRepository
 from app.db.repositories.ai_messages_repository import MessagesRepository
+from app.db.repositories.provider_settings_repository import ProviderSettingsRepository
 
 logger = get_logger("ai.orchestration.documentation")
 
@@ -80,8 +84,17 @@ async def generate_feature_documentation(
     (never raises) on any provider/key/role problem: missing documentation
     must never block a feature from being marked completed.
     """
-    provider = get_provider(workflow["provider"])
-    api_key = api_keys.get(workflow["provider"])
+    # Sprint 15.5: the Documentation role can be pointed at its own
+    # provider/model (Settings → Provider Switching), falling back to the
+    # workflow's own choice when no override exists.
+    role_override = AgentProviderDefaultsRepository(connection).get("documentation")
+    provider_id = role_override["provider"] if role_override else workflow["provider"]
+    model = role_override["model"] if role_override else workflow["model"]
+
+    provider = get_provider(provider_id)
+    api_key = api_keys.get(provider_id)
+    base_url_row = ProviderSettingsRepository(connection).get(provider_id)
+    base_url = base_url_row["base_url"] if base_url_row else None
     if provider.requires_api_key and not api_key:
         logger.info(
             "Skipping documentation generation for workflow %s: no API key available",
@@ -103,8 +116,8 @@ async def generate_feature_documentation(
     conversation = ConversationsRepository(connection).create(
         project_id=workflow["project_id"],
         title=f"Documentation: {workflow['title']}",
-        provider=workflow["provider"],
-        model=workflow["model"],
+        provider=provider_id,
+        model=model,
         agent_id=agent_row["id"] if agent_row else None,
         task_id=None,
     )
@@ -122,7 +135,7 @@ async def generate_feature_documentation(
     usage = TokenUsage()
     try:
         async for event in provider.stream_chat(
-            messages=chat_messages, model=workflow["model"], api_key=api_key
+            messages=chat_messages, model=model, api_key=api_key, base_url=base_url
         ):
             if isinstance(event, StreamChunk):
                 accumulated.append(event.delta)
@@ -139,13 +152,11 @@ async def generate_feature_documentation(
     messages_repo.add_assistant_message(
         conversation_id=conversation["id"],
         content=content,
-        provider=workflow["provider"],
-        model=workflow["model"],
+        provider=provider_id,
+        model=model,
         status="complete",
         prompt_tokens=usage.prompt_tokens,
         completion_tokens=usage.completion_tokens,
     )
-    ConversationsRepository(connection).touch(
-        conversation["id"], provider=workflow["provider"], model=workflow["model"]
-    )
+    ConversationsRepository(connection).touch(conversation["id"], provider=provider_id, model=model)
     return content

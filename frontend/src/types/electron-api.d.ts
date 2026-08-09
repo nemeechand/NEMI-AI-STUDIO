@@ -52,12 +52,71 @@ declare global {
     last_opened_at: string | null;
   }
 
-  type AiProviderId = 'openai' | 'anthropic' | 'gemini' | 'ollama';
+  type AiProviderId = 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'deepseek' | 'grok' | 'custom';
 
   interface AiProviderInfo {
     id: string;
     display_name: string;
     requires_api_key: boolean;
+    supports_base_url: boolean;
+  }
+
+  interface ProviderSettings {
+    provider_id: string;
+    enabled: boolean;
+    base_url: string | null;
+    default_model: string | null;
+    last_used_model: string | null;
+    last_used_at: string | null;
+    last_connection_status: 'untested' | 'ok' | 'error';
+    last_connection_message: string | null;
+    last_connection_at: string | null;
+  }
+
+  interface ConnectionTestResult {
+    ok: boolean;
+    message: string;
+  }
+
+  interface OllamaModelInfo {
+    name: string;
+    size_bytes: number;
+    modified_at: string | null;
+  }
+
+  interface OllamaStatus {
+    installed: boolean;
+    server_running: boolean;
+    host: string;
+    models: OllamaModelInfo[];
+  }
+
+  type AgentDefaultRoleKey = 'planner' | 'developer' | 'reviewer' | 'tester' | 'documentation';
+
+  interface AgentProviderDefault {
+    agent_role: AgentDefaultRoleKey;
+    provider: string;
+    model: string;
+    updated_at: string;
+  }
+
+  interface ProviderDashboardEntry {
+    provider_id: string;
+    display_name: string;
+    enabled: boolean;
+    requires_api_key: boolean;
+    configured: boolean;
+    default_model: string | null;
+    last_used_model: string | null;
+    last_used_at: string | null;
+    last_connection_status: 'untested' | 'ok' | 'error';
+    last_connection_message: string | null;
+    requests: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+    estimated_cost_usd: number | null;
+    avg_latency_ms: number | null;
+    errors: number;
   }
 
   interface AiConversation {
@@ -93,6 +152,7 @@ declare global {
     prompt_tokens: number | null;
     completion_tokens: number | null;
     context_refs: AiContextRef[] | null;
+    latency_ms: number | null;
     created_at: string;
   }
 
@@ -509,11 +569,41 @@ declare global {
             content: string;
             provider: string;
             model: string;
+            baseUrl?: string | null;
             contextRefs?: AiContextRefInput[];
           },
         ) => Promise<void>;
         cancelMessage: (requestId: string) => Promise<boolean>;
         onStreamEvent: (callback: (payload: AiStreamEventPayload) => void) => () => void;
+      };
+      providers: {
+        listSettings: () => Promise<ProviderSettings[]>;
+        getSettings: (providerId: string) => Promise<ProviderSettings>;
+        updateSettings: (
+          providerId: string,
+          update: { enabled?: boolean; baseUrl?: string | null; defaultModel?: string | null },
+        ) => Promise<ProviderSettings>;
+        testConnection: (
+          providerId: string,
+          baseUrl: string | null,
+        ) => Promise<ConnectionTestResult>;
+        refreshModels: (providerId: string, baseUrl: string | null) => Promise<string[]>;
+        listFavorites: (providerId: string) => Promise<string[]>;
+        setFavorite: (providerId: string, modelId: string, favorite: boolean) => Promise<string[]>;
+        getDashboard: () => Promise<ProviderDashboardEntry[]>;
+        getOllamaStatus: (baseUrl?: string | null) => Promise<OllamaStatus>;
+        pullOllamaModel: (
+          model: string,
+          baseUrl?: string | null,
+        ) => Promise<Record<string, unknown>>;
+        deleteOllamaModel: (model: string, baseUrl?: string | null) => Promise<void>;
+        listAgentDefaults: () => Promise<AgentProviderDefault[]>;
+        setAgentDefault: (
+          agentRole: string,
+          provider: string,
+          model: string,
+        ) => Promise<AgentProviderDefault>;
+        clearAgentDefault: (agentRole: string) => Promise<void>;
       };
       agents: {
         list: () => Promise<AgentInfo[]>;

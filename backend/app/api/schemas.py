@@ -49,6 +49,7 @@ class AiProviderOut(BaseModel):
     id: str
     display_name: str
     requires_api_key: bool
+    supports_base_url: bool = False
 
 
 class AiConversationCreate(BaseModel):
@@ -92,6 +93,7 @@ class AiMessageOut(BaseModel):
     prompt_tokens: int | None
     completion_tokens: int | None
     context_refs: list[AiContextRefOut] | None
+    latency_ms: int | None = None
     created_at: str
 
 
@@ -107,7 +109,96 @@ class AiSendMessageRequest(BaseModel):
     provider: str = Field(min_length=1)
     model: str = Field(min_length=1)
     api_key: str | None = None
+    base_url: str | None = None
     context_refs: list[AiContextRefIn] | None = None
+
+
+# --- AI Provider Management (Sprint 15.5) ---
+
+
+class ProviderSettingsOut(BaseModel):
+    provider_id: str
+    enabled: bool
+    base_url: str | None = None
+    default_model: str | None = None
+    last_used_model: str | None = None
+    last_used_at: str | None = None
+    last_connection_status: Literal["untested", "ok", "error"] = "untested"
+    last_connection_message: str | None = None
+    last_connection_at: str | None = None
+
+
+class ProviderSettingsUpdate(BaseModel):
+    enabled: bool | None = None
+    base_url: str | None = None
+    default_model: str | None = None
+
+
+class ConnectionTestRequest(BaseModel):
+    api_key: str | None = None
+    base_url: str | None = None
+
+
+class ConnectionTestOut(BaseModel):
+    ok: bool
+    message: str
+
+
+class OllamaModelOut(BaseModel):
+    name: str
+    size_bytes: int
+    modified_at: str | None = None
+
+
+class OllamaPullRequest(BaseModel):
+    model: str = Field(min_length=1)
+    base_url: str | None = None
+
+
+class OllamaStatusOut(BaseModel):
+    installed: bool
+    server_running: bool
+    host: str
+    models: list[OllamaModelOut]
+
+
+class ModelFavoriteToggle(BaseModel):
+    model_id: str = Field(min_length=1)
+    favorite: bool
+
+
+AgentDefaultRoleKey = Literal["planner", "developer", "reviewer", "tester", "documentation"]
+
+
+class AgentProviderDefaultOut(BaseModel):
+    agent_role: AgentDefaultRoleKey
+    provider: str
+    model: str
+    updated_at: str
+
+
+class AgentProviderDefaultSet(BaseModel):
+    provider: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+
+
+class ProviderDashboardEntry(BaseModel):
+    provider_id: str
+    display_name: str
+    enabled: bool
+    requires_api_key: bool
+    configured: bool
+    default_model: str | None = None
+    last_used_model: str | None = None
+    last_used_at: str | None = None
+    last_connection_status: Literal["untested", "ok", "error"] = "untested"
+    last_connection_message: str | None = None
+    requests: int
+    prompt_tokens: int
+    completion_tokens: int
+    estimated_cost_usd: float | None = None
+    avg_latency_ms: float | None = None
+    errors: int
 
 
 # --- Agent Orchestration (Sprint 11) ---

@@ -9,7 +9,12 @@ import path from 'node:path';
 // as an encrypted blob in the per-user userData directory, never in the
 // repo, never sent anywhere except attached to the one HTTP request that
 // needs it. The backend never persists a key it receives.
-export type ProviderId = 'openai' | 'anthropic' | 'gemini' | 'ollama';
+// Sprint 15.5: extended from 4 to 7 providers (DeepSeek/Grok/Custom are
+// additional OpenAI-compatible endpoints — each still gets its own
+// independently encrypted key, since they're genuinely different
+// accounts/services even though they share a wire protocol backend-side).
+export type ProviderId =
+  'openai' | 'anthropic' | 'gemini' | 'ollama' | 'deepseek' | 'grok' | 'custom';
 
 const CREDENTIALS_FILE = 'ai-credentials.json';
 

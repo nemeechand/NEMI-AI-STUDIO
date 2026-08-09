@@ -10,6 +10,7 @@ export interface AiProviderInfo {
   id: string;
   display_name: string;
   requires_api_key: boolean;
+  supports_base_url: boolean;
 }
 
 export interface AiConversation {
@@ -118,6 +119,7 @@ export interface SendMessageInput {
   provider: string;
   model: string;
   apiKey: string | null;
+  baseUrl?: string | null;
   contextRefs?: AiContextRefInput[];
 }
 
@@ -158,6 +160,7 @@ export async function streamMessage(
           provider: input.provider,
           model: input.model,
           api_key: input.apiKey,
+          base_url: input.baseUrl ?? null,
           context_refs: input.contextRefs?.map((ref) => ({
             path: ref.path,
             content: ref.content,

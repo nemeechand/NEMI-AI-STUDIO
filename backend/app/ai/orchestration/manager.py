@@ -27,6 +27,7 @@ from app.db.repositories.history_repository import HistoryRepository
 from app.db.repositories.knowledge_repository import KnowledgeRepository
 from app.db.repositories.memory_repository import MemoryRepository
 from app.db.repositories.milestones_repository import MilestonesRepository, MilestoneStatus
+from app.db.repositories.provider_settings_repository import ProviderSettingsRepository
 from app.db.repositories.workflows_repository import WorkflowsRepository
 from app.knowledge.analysis import analyze_impact
 
@@ -265,6 +266,9 @@ async def _execute(settings: Settings, task: dict[str, Any], api_keys: dict[str,
             f"No {task['provider']} API key was available when this task ran. "
             "Configure it in Settings, then retry."
         )
+    with get_connection(settings) as connection:
+        provider_settings_row = ProviderSettingsRepository(connection).get(task["provider"])
+    base_url = provider_settings_row["base_url"] if provider_settings_row else None
 
     chat_messages = [
         ChatMessage(role="system", content=system_prompt),
@@ -274,7 +278,7 @@ async def _execute(settings: Settings, task: dict[str, Any], api_keys: dict[str,
     usage = TokenUsage()
     last_flush = time.monotonic()
     async for event in provider.stream_chat(
-        messages=chat_messages, model=task["model"], api_key=api_key
+        messages=chat_messages, model=task["model"], api_key=api_key, base_url=base_url
     ):
         if isinstance(event, StreamChunk):
             accumulated.append(event.delta)

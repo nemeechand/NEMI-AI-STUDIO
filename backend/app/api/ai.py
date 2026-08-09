@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -22,6 +23,7 @@ from app.core.logging import get_logger
 from app.db.connection import get_connection
 from app.db.repositories.ai_conversations_repository import ConversationsRepository
 from app.db.repositories.ai_messages_repository import MessagesRepository, Status
+from app.db.repositories.provider_settings_repository import ProviderSettingsRepository
 
 router = APIRouter(prefix="/ai")
 logger = get_logger("api.ai")
@@ -30,14 +32,19 @@ logger = get_logger("api.ai")
 @router.get("/providers", response_model=list[AiProviderOut])
 def get_providers() -> list[dict[str, Any]]:
     return [
-        {"id": p.id, "display_name": p.display_name, "requires_api_key": p.requires_api_key}
+        {
+            "id": p.id,
+            "display_name": p.display_name,
+            "requires_api_key": p.requires_api_key,
+            "supports_base_url": p.supports_base_url,
+        }
         for p in list_providers()
     ]
 
 
 @router.get("/ollama/models")
 async def get_ollama_models() -> list[str]:
-    return await list_local_models()
+    return [m.name for m in await list_local_models()]
 
 
 @router.get("/conversations")
@@ -107,6 +114,7 @@ async def _stream_and_persist(
     provider_id: str,
     model: str,
     api_key: str | None,
+    base_url: str | None,
     chat_messages: list[ChatMessage],
 ) -> AsyncIterator[str]:
     settings = get_settings()
@@ -115,6 +123,7 @@ async def _stream_and_persist(
     status: Status = "complete"
     error_payload: dict[str, str] | None = None
     persisted_message: dict[str, Any] | None = None
+    started_at = time.monotonic()
 
     # Persistence lives in `finally`, not after the try block, because a
     # client disconnect doesn't always surface as our own is_disconnected()
@@ -129,7 +138,7 @@ async def _stream_and_persist(
         try:
             provider = get_provider(provider_id)
             async for event in provider.stream_chat(
-                messages=chat_messages, model=model, api_key=api_key
+                messages=chat_messages, model=model, api_key=api_key, base_url=base_url
             ):
                 if await request.is_disconnected():
                     status = "cancelled"
@@ -163,6 +172,7 @@ async def _stream_and_persist(
         if status == "complete" and await request.is_disconnected():
             status = "cancelled"
         content = "".join(accumulated)
+        latency_ms = round((time.monotonic() - started_at) * 1000)
         with get_connection(settings) as connection:
             persisted_message = MessagesRepository(connection).add_assistant_message(
                 conversation_id=conversation_id,
@@ -173,10 +183,13 @@ async def _stream_and_persist(
                 error_message=error_payload["message"] if error_payload else None,
                 prompt_tokens=usage.prompt_tokens,
                 completion_tokens=usage.completion_tokens,
+                latency_ms=latency_ms,
             )
             ConversationsRepository(connection).touch(
                 conversation_id, provider=provider_id, model=model
             )
+            if status == "complete":
+                ProviderSettingsRepository(connection).record_used(provider_id, model=model)
 
     # Only reachable when the client is still connected (GeneratorExit
     # skips straight past these — there is no one left to send SSE frames
@@ -187,7 +200,11 @@ async def _stream_and_persist(
     else:
         yield _sse(
             "usage",
-            {"promptTokens": usage.prompt_tokens, "completionTokens": usage.completion_tokens},
+            {
+                "promptTokens": usage.prompt_tokens,
+                "completionTokens": usage.completion_tokens,
+                "latencyMs": latency_ms,
+            },
         )
     yield _sse("done", {"messageId": persisted_message["id"], "status": status})
 
@@ -236,6 +253,7 @@ def send_message_stream(
             provider_id=payload.provider,
             model=payload.model,
             api_key=payload.api_key,
+            base_url=payload.base_url,
             chat_messages=chat_messages,
         ),
         media_type="text/event-stream",

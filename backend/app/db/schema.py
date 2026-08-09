@@ -296,6 +296,54 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_file_snapshots_task_id ON file_snapshots(task_id)",
+    # Sprint 15.5: structured, per-provider configuration (enable/disable,
+    # base URL, default/last-used model, last real connection-test
+    # outcome) — deliberately its own table rather than rows in the
+    # generic `settings` key-value table, matching the precedent set by
+    # `ai_conversations`/`ai_messages` over the generic `memory` blob.
+    # `provider_id` is one of the app.ai.registry provider ids ('openai',
+    # 'anthropic', 'gemini', 'ollama', 'deepseek', 'grok', 'custom').
+    """
+    CREATE TABLE IF NOT EXISTS provider_settings (
+        provider_id TEXT PRIMARY KEY,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        base_url TEXT,
+        default_model TEXT,
+        last_used_model TEXT,
+        last_used_at TEXT,
+        last_connection_status TEXT NOT NULL
+            CHECK (last_connection_status IN ('untested', 'ok', 'error')) DEFAULT 'untested',
+        last_connection_message TEXT,
+        last_connection_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    # Sprint 15.5: the Model Manager's per-provider favorites list.
+    """
+    CREATE TABLE IF NOT EXISTS model_favorites (
+        id TEXT PRIMARY KEY,
+        provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (provider_id, model_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_model_favorites_provider ON model_favorites(provider_id)",
+    # Sprint 15.5: lets each orchestrated agent role use its own
+    # provider/model instead of always inheriting the workflow's provider —
+    # consulted by create_milestone_pipelines()/generate_feature_documentation(),
+    # falling back to the workflow's own provider/model when no row exists
+    # for a role.
+    """
+    CREATE TABLE IF NOT EXISTS agent_provider_defaults (
+        agent_role TEXT PRIMARY KEY
+            CHECK (agent_role IN ('planner', 'developer', 'reviewer', 'tester', 'documentation')),
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
 )
 
 
@@ -357,4 +405,7 @@ def init_db(connection: sqlite3.Connection) -> None:
     _add_column_if_missing(connection, "workflows", "documentation", "TEXT")
     _add_column_if_missing(connection, "workflows", "documentation_generated_at", "TEXT")
     _add_column_if_missing(connection, "workflows", "last_test_result", "TEXT")
+    # Sprint 15.5: real wall-clock milliseconds from request start to the
+    # provider's final StreamDone event — the AI Chat's "Response Time".
+    _add_column_if_missing(connection, "ai_messages", "latency_ms", "INTEGER")
     connection.commit()

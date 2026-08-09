@@ -1,8 +1,8 @@
 # ARCHITECTURE.md
 
-Version: 2.2
-Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8); Monaco Code Editor Locked (Sprint 9); AI Chat & Agent Framework Locked (Sprint 10); Agent Orchestration Framework Locked (Sprint 11); Workflow Engine & AI Project Manager Locked (Sprint 12); Live Development Dashboard & Intelligence Center Locked (Sprint 13); Knowledge Graph & AI Memory Engine Locked (Sprint 14); Autonomous Coding Engine Locked (Sprint 15)
-Governs: Sprint 15 onward
+Version: 2.3
+Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8); Monaco Code Editor Locked (Sprint 9); AI Chat & Agent Framework Locked (Sprint 10); Agent Orchestration Framework Locked (Sprint 11); Workflow Engine & AI Project Manager Locked (Sprint 12); Live Development Dashboard & Intelligence Center Locked (Sprint 13); Knowledge Graph & AI Memory Engine Locked (Sprint 14); Autonomous Coding Engine Locked (Sprint 15); AI Provider Management Locked (Sprint 15.5)
+Governs: Sprint 15.5 onward
 
 ---
 
@@ -144,11 +144,20 @@ Three processes, already implemented and hardened in Sprint 2:
 
 All renderer → native calls go through `window.nemi`
 (declared in `frontend/src/types/electron-api.d.ts`). As of Sprint 15
-this surface still has twelve namespaces (Sprint 15 extended two
-existing ones — `agents` and `workflows` — rather than adding a
-thirteenth, since the Autonomous Coding Engine's new capabilities are
-extensions of the existing agent/workflow lifecycle, not a new
-concern): `windowControls` (Sprint 2),
+this surface had twelve namespaces (Sprint 15 extended two existing
+ones — `agents` and `workflows` — rather than adding a thirteenth,
+since the Autonomous Coding Engine's new capabilities are extensions
+of the existing agent/workflow lifecycle, not a new concern). Sprint
+15.5 added a genuinely new thirteenth namespace, `providers`
+(`listSettings()`/`getSettings()`/`updateSettings()`,
+`testConnection()`, `refreshModels()`, `listFavorites()`/
+`setFavorite()`, `getDashboard()`, `getOllamaStatus()`/
+`pullOllamaModel()`/`deleteOllamaModel()`,
+`listAgentDefaults()`/`setAgentDefault()`/`clearAgentDefault()` — see
+AI PROVIDER MANAGEMENT below) — a genuinely new concern (provider
+configuration/dashboard/Ollama management), not an extension of an
+existing namespace's lifecycle, unlike Sprint 15's two extensions.
+`windowControls` (Sprint 2),
 `backend` (Sprint 4: `health()`; Sprint 5: `logs()`), `fs`
 (Sprint 5: project/file CRUD + change notifications; Sprint 7:
 `selectDirectory()`, `createDirectory()`; Sprint 9: `listAllFiles()`
@@ -177,9 +186,10 @@ AUTONOMOUS CODING ENGINE further down), `workflows` (Sprint 12:
 `getGraph()`, `getStats()`, `listEmbeddingProviders()`,
 `generateEmbeddings()`, `search()`, `getImpact()`, `getFileContext()`,
 `getFileHistory()`, `getDiagram()`, `listMemory()` — see KNOWLEDGE
-GRAPH & AI MEMORY ENGINE below). A component must never assume Node.js
-globals exist. All ambient types shared across `window.nemi` methods
-(`ExplorerEntry`, `LogEntry`, `BackendHealth`, `ProjectRecord`,
+GRAPH & AI MEMORY ENGINE below), and `providers` (Sprint 15.5, see
+above and AI PROVIDER MANAGEMENT below). A component must never assume
+Node.js globals exist. All ambient types shared across `window.nemi`
+methods (`ExplorerEntry`, `LogEntry`, `BackendHealth`, `ProjectRecord`,
 `SearchMatch`, `SearchOptions`, `AiProviderInfo`, `AiConversation`,
 `AiMessage`, `AiContextRef`, `AiStreamEventPayload`, `AgentInfo`,
 `AgentRoleKey`, `AgentTask`, `ProposedFile`, `Workflow`,
@@ -190,9 +200,12 @@ globals exist. All ambient types shared across `window.nemi` methods
 `KnowledgeGraph`, `KnowledgeStats`, `IndexResult`,
 `EmbeddingProviderInfo`, `EmbedResult`, `SearchResult`, `ImpactResult`,
 `DiagramResult`, `FileContext`, `MemoryEntry`, `FileSnapshotInput`,
-`RollbackInfo`, `TestResult`, `FeatureSummary`, `RiskLevel`, etc.) live
-inside the `declare global` block of `electron-api.d.ts` so they're
-usable anywhere in the renderer without imports.
+`RollbackInfo`, `TestResult`, `FeatureSummary`, `RiskLevel`,
+`ProviderSettings`, `ConnectionTestResult`, `OllamaModelInfo`,
+`OllamaStatus`, `AgentDefaultRoleKey`, `AgentProviderDefault`,
+`ProviderDashboardEntry`, etc.) live inside the `declare global` block
+of `electron-api.d.ts` so they're usable anywhere in the renderer
+without imports.
 
 The renderer never talks to the backend HTTP API directly — it has no
 network access to it, and the CSP's `connect-src 'self'` intentionally
@@ -519,21 +532,27 @@ MASTER_SPECIFICATION's APPLICATION LAYERS: `frontend/src/ai/` (state),
 `frontend/src/components/chat/` (UI), `backend/app/ai/` (providers).
 
 **Provider abstraction — `backend/app/ai/providers/`.** One
-`AIProvider` per backend (`OpenAIProvider`, `AnthropicProvider`,
-`GeminiProvider`, `OllamaProvider`), each implementing a single
-`stream_chat()` that normalizes its own SDK's streaming shape into two
-event types (`StreamChunk`, then exactly one `StreamDone` carrying
-whatever usage the provider reported) so `api/ai.py` never needs to
-know which provider it's talking to. SDK exceptions are caught and
-re-raised as `app.ai.errors.ProviderError` subclasses
-(`AuthenticationError`, `RateLimitError`, `InvalidRequestError`,
-`ProviderNetworkError`, `MissingApiKeyError`) — normalized error codes
-regardless of which SDK actually failed. `OpenAIProvider`/
-`AnthropicProvider`/`GeminiProvider` use each vendor's official async
-SDK (`openai`, `anthropic`, `google-genai`); `OllamaProvider` talks
-directly to the user's local Ollama server's `/api/chat` (newline-
-delimited JSON) via `httpx` — no SDK exists or is needed for a local
-HTTP server, and it's the one provider that needs no API key at all.
+`AIProvider` per backend, each implementing `stream_chat()` that
+normalizes its own SDK's streaming shape into two event types
+(`StreamChunk`, then exactly one `StreamDone` carrying whatever usage
+the provider reported) so `api/ai.py` never needs to know which
+provider it's talking to. SDK exceptions are caught and re-raised as
+`app.ai.errors.ProviderError` subclasses (`AuthenticationError`,
+`RateLimitError`, `InvalidRequestError`, `ProviderNetworkError`,
+`MissingApiKeyError`) — normalized error codes regardless of which SDK
+actually failed. `OpenAIProvider`/`AnthropicProvider`/`GeminiProvider`
+use each vendor's official async SDK (`openai`, `anthropic`,
+`google-genai`); `OllamaProvider` talks directly to the user's local
+Ollama server's `/api/chat` (newline-delimited JSON) via `httpx` — no
+SDK exists or is needed for a local HTTP server, and it's the one
+provider that needs no API key at all. As of Sprint 15.5 (see AI
+PROVIDER MANAGEMENT below) this grew to seven providers — DeepSeek,
+Grok (xAI), and a user-defined Custom endpoint were added as thin
+subclasses of a new shared `OpenAICompatibleProvider`
+(`backend/app/ai/providers/openai_compatible.py`), since all four
+(including `OpenAIProvider` itself) speak the identical OpenAI Chat
+Completions wire protocol via the `openai` SDK, differing only in
+`display_name`/`default_base_url`/`requires_base_url`.
 
 **API keys are never stored server-side, matching DATABASE_SCHEMA.md's
 existing "no column stores secrets" convention.** They're encrypted
@@ -1557,6 +1576,150 @@ agent (unchanged Sprint 11 scoping).
 
 ---
 
+# AI PROVIDER MANAGEMENT (locked decision — Sprint 15.5)
+
+Replaces the previous single-page, key-entry-only Settings panel
+(`AiProviderSettings.tsx`) with a full tabbed Settings module —
+General, Editor, AI Providers, Models, Usage, Security, About
+(`frontend/src/components/settings/SettingsModal.tsx` and its new
+per-tab components) — and extends the provider layer from four
+providers to seven: OpenAI, Anthropic, Google Gemini, Ollama,
+DeepSeek, Grok (xAI), and a user-defined Custom OpenAI-compatible
+endpoint.
+
+**Provider consolidation.** DeepSeek, Grok, and Custom all speak the
+identical OpenAI Chat Completions wire protocol, so rather than three
+more near-duplicate SDK integrations they're thin subclasses of a new
+`OpenAICompatibleProvider` base class (`backend/app/ai/
+providers/openai_compatible.py`) that `OpenAIProvider` itself was
+folded into — one real streaming/error-handling implementation, four
+providers differing only in `display_name`/`default_base_url`/
+`requires_base_url`. `CustomProvider.requires_base_url = True`: unlike
+every other provider, Custom has no honest default to fall back to,
+so it raises a clear `InvalidRequestError` rather than silently
+hitting the real OpenAI API when unconfigured.
+
+**`base_url` support is now a first-class, honestly-scoped concept.**
+`AIProvider.supports_base_url: ClassVar[bool]` — `True` for every
+provider except (none currently; even Anthropic/Gemini accept a real
+SDK-level base URL override, e.g. for a compatible proxy). Passing a
+`base_url` to a provider that doesn't act on it is simply ignored, not
+an error — the Settings UI shows the field uniformly but only
+providers that can genuinely honor it are affected. `base_url` flows
+end-to-end: Settings → `provider_settings.base_url` → attached
+automatically to every chat send (`AiProvider.tsx` looks it up by the
+currently-selected provider) and to every orchestrated agent task
+(`manager.py` looks it up by `task["provider"]`) — never a per-message
+field the user has to re-enter.
+
+**Real "Test Connection", never fabricated.** A new abstract
+`AIProvider.test_connection(api_key, base_url) -> ConnectionTestResult`
+makes one real, cheap network call (a models-list call for every
+provider except Ollama, which re-uses its existing real `/api/tags`
+call) and never raises — any failure becomes
+`ConnectionTestResult(ok=False, message=...)`, the same "a check must
+never throw, only honestly report" discipline as every other
+verification path in this codebase. The result is persisted to
+`provider_settings.last_connection_status`/`last_connection_message`/
+`last_connection_at` (see DATABASE_SCHEMA.md) so Settings can show a
+provider's last-known real status without re-testing on every render.
+
+**Real "Refresh Models", not a fabricated catalog.** A new
+`AIProvider.list_models(api_key, base_url) -> list[str]` (default:
+empty — "no such capability" is an honest answer, not a guess)
+overridden by the OpenAI-compatible family (`client.models.list()`),
+Anthropic (`client.models.list()`), and Gemini
+(`client.aio.models.list()`). Ollama already has a genuinely live
+local catalog via `/api/tags`, exposed separately (see Ollama
+Management below) rather than through this method. The UI's static
+`SUGGESTED_MODELS` list (`frontend/src/ai/providerDefaults.ts`) is
+still shown as `<datalist>` suggestions when no live refresh has run —
+never claimed to be a complete catalog.
+
+**Ollama Management — `backend/app/ai/providers/ollama_provider.py`,
+extended.** `is_ollama_installed()` checks the real `ollama` CLI on
+`PATH` (`shutil.which`); `is_server_running()` and
+`list_local_models()` (now returning real `OllamaModel(name,
+size_bytes, modified_at)`, not just names) hit the real local HTTP
+server; `pull_model()`/`delete_model()` call Ollama's real
+`/api/pull`/`/api/delete`. `GET /providers/ollama/status` aggregates
+install/server/model-list into one call for the Settings panel;
+`POST /providers/ollama/pull` and `DELETE /providers/ollama/models/
+{name}` back Settings' Pull/Delete buttons
+(`OllamaManagementPanel.tsx`). The pull endpoint is currently
+synchronous (awaits Ollama's own streaming pull to completion and
+returns the final status line) rather than progress-streamed to the
+UI — a real, honest limitation, stated up front: the SSE
+infrastructure already exists (`_stream_and_persist` in `api/ai.py`)
+and is the natural template for a future streaming-progress version,
+but wiring a second SSE relay path through Electron main was out of
+scope for this sprint given everything else in it.
+
+**New tables — `provider_settings`/`model_favorites`/
+`agent_provider_defaults`** (see DATABASE_SCHEMA.md for full column
+lists). Structured per-provider configuration (enable/disable, base
+URL, default/last-used model, last real connection-test outcome)
+deliberately gets its own table rather than rows in the generic
+`settings` key-value table (still unused) — the same "structured data
+deserves real columns" reasoning `ai_conversations`/`ai_messages` were
+given over the generic `memory` blob table in Sprint 10.
+`agent_provider_defaults` is a genuinely new table, not a widened
+`agent_tasks.agent_role` CHECK constraint, specifically because it
+needs a fifth `'documentation'` value that `agent_tasks.agent_role`
+deliberately does not carry (Sprint 15 kept Documentation standalone
+to avoid that exact CHECK-constraint change — unchanged this sprint).
+`ai_messages` gained one additive column, `latency_ms` — real
+wall-clock milliseconds from request start to the provider's final
+`StreamDone`, captured in `_stream_and_persist()` via
+`time.monotonic()`.
+
+**Provider Switching — every orchestrated agent role can use its own
+provider/model.** `create_milestone_pipelines()`
+(`project_manager.py`) and `generate_feature_documentation()`
+(`documentation.py`) both consult `agent_provider_defaults` for their
+role (`planner`/`developer`/`reviewer`/`tester`/`documentation`) and
+fall back to the workflow's own provider/model when no override
+exists — set once per role in Settings → Usage → Provider Switching
+(`UsageTab.tsx`), not per task instance, keeping the UI to a simple
+five-row mapping rather than per-run overrides.
+
+**Provider Dashboard — `GET /providers/dashboard`.** Aggregates two
+real, already-persisted sources: `provider_settings` (enabled,
+default/last-used model, last connection status) and a new
+`StatsRepository.provider_dashboard()` method (real per-provider
+`requests`/`prompt_tokens`/`completion_tokens`/`estimated_cost_usd`/
+`avg_latency_ms`/`errors`, aggregated fresh from `ai_messages` on every
+call — same "recompute, don't cache, at this app's desktop-single-user
+scale" precedent `StatsRepository.token_summary()` already
+established in Sprint 13). Whether a provider's API key is actually
+configured is a renderer-side (Electron `safeStorage`) fact the
+backend never sees, so the dashboard's `configured` field only reports
+`true` for providers that don't need a key (Ollama) — the Settings UI
+overlays the real renderer-side `configuredProviders` set on top for
+key-requiring providers, rather than the backend ever guessing.
+
+**AI Chat additions.** `TokenUsageIndicator.tsx` now shows, alongside
+the existing real token counts, an estimated cost (ported from
+`backend/app/ai/pricing.py`'s published-rate table into
+`frontend/src/ai/pricing.ts` — kept in sync deliberately, `null` for
+any model not in the table rather than a guessed number, same
+"unknown beats fabricated" rule the backend table already documents)
+and the most recent real response time (`ai_messages.latency_ms`).
+Provider switching directly from Chat already existed via
+`ProviderSelector.tsx` (Sprint 10) — its provider `<select>` is driven
+by the same `GET /ai/providers` list, which now includes all seven
+providers with no further change needed.
+
+**Explicitly out of scope**, stated up front: real-time streamed
+Ollama pull progress (see Ollama Management above); a live-fetched
+DeepSeek/Grok pricing table (no confident current published numbers
+at implementation time — matching the existing rule that an unlisted
+model reports cost as `null`, never a guessed figure, rather than
+adding possibly-wrong rates); per-task-instance provider overrides
+(Provider Switching is per-role, not per-run).
+
+---
+
 # PLUGIN / EXTENSION ARCHITECTURE (future — not started)
 
 MASTER_SPECIFICATION.md lists "Plugin Marketplace" under FUTURE
@@ -1877,6 +2040,32 @@ must never run with Node.js integration in the renderer.
     agent has no mechanism to propose a deletion (Sprint 11's locked
     ```` ```file:path``` ```` format), so the summary states that
     honestly instead of silently implying deletions were checked for.
+67. **(Sprint 15.5)** DeepSeek/Grok/Custom are `OpenAICompatibleProvider`
+    subclasses, not separate SDK integrations — all four (including
+    `OpenAIProvider`) share one real streaming/error-handling
+    implementation, differing only in `display_name`/`default_base_url`/
+    `requires_base_url`.
+68. **(Sprint 15.5)** `agent_provider_defaults` is a new standalone
+    table, not a widened `agent_tasks.agent_role` CHECK constraint — it
+    needs a fifth `'documentation'` value that `agent_tasks.agent_role`
+    deliberately still does not carry (unchanged Sprint 15 scoping).
+69. **(Sprint 15.5)** `test_connection()`/`list_models()` never raise —
+    any failure becomes a reported `ok=False`/empty-list result, the
+    same "a check must never throw" discipline as every other
+    verification path in this codebase, never a raw exception surfaced
+    to Settings.
+70. **(Sprint 15.5)** Ollama model pulls are synchronous (await
+    completion, return the final status), not progress-streamed to the
+    UI — a stated, honest limitation, not a claimed live-progress
+    feature; the SSE infrastructure a future streaming version would
+    reuse already exists (`_stream_and_persist`).
+71. **(Sprint 15.5)** DeepSeek/Grok were deliberately NOT added to the
+    cost-estimate pricing table — no confident current published rates
+    at implementation time — preserving the existing rule that an
+    unlisted model reports cost as `null`, never a guessed number.
+72. **(Sprint 15.5)** Provider Switching is per agent-role (one mapping
+    in Settings), not per task instance — keeps the UI to a simple
+    five-row table rather than per-run overrides.
 
 ---
 

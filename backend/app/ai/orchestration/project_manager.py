@@ -4,6 +4,9 @@ import re
 import sqlite3
 from typing import Any
 
+from app.db.repositories.agent_provider_defaults_repository import (
+    AgentProviderDefaultsRepository,
+)
 from app.db.repositories.agent_tasks_repository import AgentRoleKey, AgentTasksRepository
 from app.db.repositories.milestones_repository import MilestonesRepository
 
@@ -82,6 +85,9 @@ def create_milestone_pipelines(
     milestones_repo = MilestonesRepository(connection)
     tasks_repo = AgentTasksRepository(connection)
     requires_approval = workflow["approval_mode"] == "manual"
+    # Sprint 15.5: each role can override the workflow's provider/model —
+    # a role with no row here simply inherits the workflow's own choice.
+    role_defaults = AgentProviderDefaultsRepository(connection).list_all()
 
     previous_stage_task_id = decomposition_task_id
     for order_index, data in enumerate(milestones_data):
@@ -92,6 +98,7 @@ def create_milestone_pipelines(
             order_index=order_index,
         )
         for role in _MILESTONE_PIPELINE:
+            override = role_defaults.get(role)
             task = tasks_repo.create(
                 project_id=workflow["project_id"],
                 title=f"{milestone['title']} — {role.capitalize()}",
@@ -99,8 +106,8 @@ def create_milestone_pipelines(
                 agent_role=role,
                 priority=2,
                 depends_on_task_id=previous_stage_task_id,
-                provider=workflow["provider"],
-                model=workflow["model"],
+                provider=override["provider"] if override else workflow["provider"],
+                model=override["model"] if override else workflow["model"],
                 workflow_id=workflow["id"],
                 milestone_id=milestone["id"],
                 requires_approval=requires_approval,

@@ -65,6 +65,7 @@ class MessagesRepository:
         error_message: str | None = None,
         prompt_tokens: int | None = None,
         completion_tokens: int | None = None,
+        latency_ms: int | None = None,
     ) -> dict[str, Any]:
         return self._insert(
             conversation_id=conversation_id,
@@ -77,6 +78,7 @@ class MessagesRepository:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             context_refs=None,
+            latency_ms=latency_ms,
         )
 
     def _insert(
@@ -92,6 +94,7 @@ class MessagesRepository:
         prompt_tokens: int | None,
         completion_tokens: int | None,
         context_refs: list[dict[str, Any]] | None,
+        latency_ms: int | None = None,
     ) -> dict[str, Any]:
         message_id = str(uuid4())
         now = datetime.now(UTC).isoformat()
@@ -99,8 +102,9 @@ class MessagesRepository:
             """
             INSERT INTO ai_messages
                 (id, conversation_id, role, content, provider, model, status,
-                 error_message, prompt_tokens, completion_tokens, context_refs, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 error_message, prompt_tokens, completion_tokens, context_refs, latency_ms,
+                 created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 message_id,
@@ -114,6 +118,7 @@ class MessagesRepository:
                 prompt_tokens,
                 completion_tokens,
                 json.dumps(context_refs) if context_refs else None,
+                latency_ms,
                 now,
             ),
         )

@@ -39,6 +39,13 @@ import type {
   MemoryEntry,
   SearchResult,
 } from './knowledge-client';
+import type {
+  AgentProviderDefault,
+  ConnectionTestResult,
+  OllamaStatus,
+  ProviderDashboardEntry,
+  ProviderSettings,
+} from './providers-client';
 
 const backend = {
   health: (): Promise<BackendHealth> => ipcRenderer.invoke('backend:health'),
@@ -119,6 +126,7 @@ const aiApi = {
       content: string;
       provider: string;
       model: string;
+      baseUrl?: string | null;
       contextRefs?: AiContextRefInput[];
     },
   ): Promise<void> => ipcRenderer.invoke('ai:send-message', requestId, input),
@@ -267,6 +275,43 @@ const knowledgeApi = {
   ): Promise<MemoryEntry[]> => ipcRenderer.invoke('knowledge:list-memory', projectId, type),
 };
 
+const providersApi = {
+  listSettings: (): Promise<ProviderSettings[]> => ipcRenderer.invoke('providers:list-settings'),
+  getSettings: (providerId: string): Promise<ProviderSettings> =>
+    ipcRenderer.invoke('providers:get-settings', providerId),
+  updateSettings: (
+    providerId: string,
+    update: { enabled?: boolean; baseUrl?: string | null; defaultModel?: string | null },
+  ): Promise<ProviderSettings> =>
+    ipcRenderer.invoke('providers:update-settings', providerId, update),
+  testConnection: (providerId: string, baseUrl: string | null): Promise<ConnectionTestResult> =>
+    ipcRenderer.invoke('providers:test-connection', providerId, baseUrl),
+  refreshModels: (providerId: string, baseUrl: string | null): Promise<string[]> =>
+    ipcRenderer.invoke('providers:refresh-models', providerId, baseUrl),
+  listFavorites: (providerId: string): Promise<string[]> =>
+    ipcRenderer.invoke('providers:list-favorites', providerId),
+  setFavorite: (providerId: string, modelId: string, favorite: boolean): Promise<string[]> =>
+    ipcRenderer.invoke('providers:set-favorite', providerId, modelId, favorite),
+  getDashboard: (): Promise<ProviderDashboardEntry[]> =>
+    ipcRenderer.invoke('providers:get-dashboard'),
+  getOllamaStatus: (baseUrl?: string | null): Promise<OllamaStatus> =>
+    ipcRenderer.invoke('providers:ollama-status', baseUrl),
+  pullOllamaModel: (model: string, baseUrl?: string | null): Promise<Record<string, unknown>> =>
+    ipcRenderer.invoke('providers:ollama-pull', model, baseUrl),
+  deleteOllamaModel: (model: string, baseUrl?: string | null): Promise<void> =>
+    ipcRenderer.invoke('providers:ollama-delete', model, baseUrl),
+  listAgentDefaults: (): Promise<AgentProviderDefault[]> =>
+    ipcRenderer.invoke('providers:list-agent-defaults'),
+  setAgentDefault: (
+    agentRole: string,
+    provider: string,
+    model: string,
+  ): Promise<AgentProviderDefault> =>
+    ipcRenderer.invoke('providers:set-agent-default', agentRole, provider, model),
+  clearAgentDefault: (agentRole: string): Promise<void> =>
+    ipcRenderer.invoke('providers:clear-agent-default', agentRole),
+};
+
 const windowControls = {
   minimize: () => ipcRenderer.invoke('window:minimize'),
   maximizeToggle: () => ipcRenderer.invoke('window:maximize-toggle'),
@@ -286,6 +331,7 @@ contextBridge.exposeInMainWorld('nemi', {
   fs: fsApi,
   projects,
   ai: aiApi,
+  providers: providersApi,
   agents: agentsApi,
   workflows: workflowsApi,
   system: systemApi,

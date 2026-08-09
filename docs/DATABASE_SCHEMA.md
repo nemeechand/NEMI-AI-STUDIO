@@ -1,7 +1,7 @@
 # DATABASE_SCHEMA.md
 
-Version: 1.8
-Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4); `projects` Repository Implemented (Sprint 7); `ai_conversations`/`ai_messages` Added and Implemented (Sprint 10); `agent_tasks` Added and `memory` Repository Implemented (Sprint 11); `workflows`/`milestones` Added and `agent_tasks` Extended (Sprint 12); `history` Repository Implemented and `agent_tasks.live_output` Added (Sprint 13); `graph_nodes`/`graph_edges`/`embeddings` Added, `files` Repository Implemented, `memory`'s Remaining Types Implemented (Sprint 14); `file_snapshots` Added, `agent_tasks`/`workflows` Extended for the Autonomous Coding Engine (Sprint 15)
+Version: 1.9
+Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4); `projects` Repository Implemented (Sprint 7); `ai_conversations`/`ai_messages` Added and Implemented (Sprint 10); `agent_tasks` Added and `memory` Repository Implemented (Sprint 11); `workflows`/`milestones` Added and `agent_tasks` Extended (Sprint 12); `history` Repository Implemented and `agent_tasks.live_output` Added (Sprint 13); `graph_nodes`/`graph_edges`/`embeddings` Added, `files` Repository Implemented, `memory`'s Remaining Types Implemented (Sprint 14); `file_snapshots` Added, `agent_tasks`/`workflows` Extended for the Autonomous Coding Engine (Sprint 15); `provider_settings`/`model_favorites`/`agent_provider_defaults` Added, `ai_messages.latency_ms` Added for AI Provider Management (Sprint 15.5)
 Engine: SQLite
 
 ---
@@ -237,6 +237,7 @@ that did its work.
 | prompt_tokens       | INTEGER |                                                  | nullable — from the provider's usage response, when available |
 | completion_tokens   | INTEGER |                                                  | nullable                                        |
 | context_refs        | TEXT    |                                                  | nullable, JSON-encoded array of `{path, startLine?, endLine?}` — file/selection references attached to a user message, so history can re-render context chips |
+| latency_ms          | INTEGER | (Sprint 15.5)                                   | nullable — real wall-clock milliseconds from request start to the provider's final `StreamDone` event; set for assistant messages only. AI Chat's "Response Time" |
 | created_at          | TEXT    | NOT NULL                                        |                                                    |
 
 Index: `idx_ai_messages_conversation_id` on `conversation_id`.
@@ -428,6 +429,73 @@ nothing was, rather than silently succeeding); `POST
 /agents/tasks/{id}/mark-rolled-back` confirms Electron actually
 restored/deleted every file.
 
+## provider_settings (Sprint 15.5)
+
+| Column                  | Type    | Constraints                                                      | Notes                                              |
+|--------------------------|---------|----------------------------------------------------------------------|---------------------------------------------------------|
+| provider_id              | TEXT    | PRIMARY KEY                                                        | one of app.ai.registry's ids: openai/anthropic/gemini/ollama/deepseek/grok/custom |
+| enabled                  | INTEGER | NOT NULL, DEFAULT 1                                                | boolean (0/1) — Settings' per-provider Enable/Disable   |
+| base_url                 | TEXT    |                                                                     | nullable — override for providers where `supports_base_url` is true; unset means the SDK's own default |
+| default_model            | TEXT    |                                                                     | nullable — Settings' per-provider default model         |
+| last_used_model          | TEXT    |                                                                     | nullable — set by `ProviderSettingsRepository.record_used()` after every successful chat send |
+| last_used_at             | TEXT    |                                                                     | nullable, ISO-8601 — alongside `last_used_model`         |
+| last_connection_status   | TEXT    | NOT NULL, CHECK IN ('untested','ok','error'), DEFAULT 'untested'   | set only by a real `POST /providers/{id}/test-connection` call, never guessed |
+| last_connection_message  | TEXT    |                                                                     | nullable — the real message from that test (e.g. "Connected — 12 model(s) available.") |
+| last_connection_at       | TEXT    |                                                                     | nullable, ISO-8601                                        |
+| created_at               | TEXT    | NOT NULL                                                           | row created lazily on first write, not at startup         |
+| updated_at               | TEXT    | NOT NULL                                                           |                                                             |
+
+A provider with no row here simply hasn't been touched in Settings yet
+— the API reports all-default values (`enabled: true`, everything
+else `null`/`'untested'`) rather than requiring a seed row per
+provider. Deliberately its own table rather than rows in the generic
+`settings` key-value table (which remains schema-ready/unused), for
+the same "structured data deserves real columns" reasoning
+`ai_conversations`/`ai_messages` were given over the generic `memory`
+blob table in Sprint 10.
+
+## model_favorites (Sprint 15.5)
+
+| Column      | Type | Constraints                          | Notes |
+|-------------|------|------------------------------------------|-----------|
+| id          | TEXT | PRIMARY KEY                             |           |
+| provider_id | TEXT | NOT NULL                                |           |
+| model_id    | TEXT | NOT NULL                                |           |
+| created_at  | TEXT | NOT NULL                                |           |
+
+Index: `idx_model_favorites_provider` on `provider_id`.
+Unique constraint: `(provider_id, model_id)` — marking an
+already-favorited model favorite again is a no-op, not a duplicate row.
+
+The Model Manager's per-provider favorites list (Settings → Models →
+star icon).
+
+## agent_provider_defaults (Sprint 15.5)
+
+| Column      | Type | Constraints                                                                                    | Notes |
+|-------------|------|-----------------------------------------------------------------------------------------------------|-----------|
+| agent_role  | TEXT | PRIMARY KEY, CHECK IN ('planner','developer','reviewer','tester','documentation')                  | note this CHECK includes `'documentation'` — unlike `agent_tasks.agent_role`, which deliberately does not (see that table's notes) |
+| provider    | TEXT | NOT NULL                                                                                            |           |
+| model       | TEXT | NOT NULL                                                                                            |           |
+| updated_at  | TEXT | NOT NULL                                                                                            |           |
+
+Lets each orchestrated agent role (Settings → Usage → Provider
+Switching) use its own provider/model instead of always inheriting the
+workflow's. A role with no row here has no override —
+`create_milestone_pipelines()` (`app/ai/orchestration/project_manager.py`)
+and `generate_feature_documentation()`
+(`app/ai/orchestration/documentation.py`) both fall back to the
+workflow's own `provider`/`model` when no row exists for a role. This
+is a genuinely new, standalone table rather than a widened
+`agent_tasks.agent_role` CHECK constraint — it needs a fifth
+`'documentation'` value that `agent_tasks.agent_role` deliberately
+does not carry (Sprint 15 kept the Documentation Engine as a
+standalone call, not a queued `agent_tasks` role, specifically to
+avoid touching that CHECK constraint — see the `agent_tasks` table
+notes above). `agent_provider_defaults` is free to include
+`'documentation'` in its own CHECK because it's a brand-new table, not
+an existing one under the SQLite "can't alter a CHECK in place" limit.
+
 ---
 
 # RELATIONSHIPS
@@ -458,11 +526,17 @@ graph_nodes 0..1---1 files/agent_tasks/workflows/etc.  (graph_nodes.ref_id — a
 embeddings 0..1---1 files/memory/workflows  (embeddings.entity_id — same "id into whichever table entity_type names" pattern as graph_nodes.ref_id, not a FK)
 agent_tasks 1---* file_snapshots  (file_snapshots.task_id; write-once per (task, file))
 projects 1---* file_snapshots     (project_id nullable)
+provider_settings        (standalone, keyed by provider_id — not a FK, since
+                           provider ids come from app.ai.registry, not a DB table)
+model_favorites          (standalone, provider_id/model_id are plain values,
+                           not FKs — same reasoning as provider_settings)
+agent_provider_defaults  (standalone, keyed by agent_role — provider is a
+                           plain provider id value, not a FK)
 ```
 
 ---
 
-# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7, Sprint 10, Sprint 11, Sprint 12, Sprint 13, Sprint 14, Sprint 15)
+# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7, Sprint 10, Sprint 11, Sprint 12, Sprint 13, Sprint 14, Sprint 15, Sprint 15.5)
 
 - Schema implemented exactly as designed above:
   `backend/app/db/schema.py::SCHEMA_STATEMENTS` /  `init_db()`.
@@ -505,6 +579,16 @@ projects 1---* file_snapshots     (project_id nullable)
   `agent_tasks` (agent pipeline scheduling) and Sprint 12's
   `workflows` (AI Project Manager goals) — different tables for
   different concerns, not a rename.
+- **`provider_settings`/`model_favorites`/`agent_provider_defaults` are
+  new tables added this sprint (Sprint 15.5)**, backing AI Provider
+  Management — see their table sections above and ARCHITECTURE.md's
+  AI PROVIDER MANAGEMENT section. `ProviderSettingsRepository`,
+  `ModelFavoritesRepository`, and `AgentProviderDefaultsRepository`
+  (`backend/app/db/repositories/`) back the new `/providers*` API
+  (`backend/app/api/providers.py`). `ai_messages` gained one additive
+  column, `latency_ms`, via `_add_column_if_missing()` — not touching
+  its existing `status`/`role` CHECK constraints, continuing the same
+  discipline as every prior sprint's schema change.
 - **`file_snapshots` is a new table added this sprint (Sprint 15)**,
   backing the Safe Change Engine / Rollback System — see its table
   section above and ARCHITECTURE.md's AUTONOMOUS CODING ENGINE section.

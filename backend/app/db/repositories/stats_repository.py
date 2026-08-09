@@ -125,3 +125,52 @@ class StatsRepository:
             "total_completion_tokens": total_completion,
             "total_estimated_cost_usd": total_cost,
         }
+
+    def provider_dashboard(self) -> dict[str, dict[str, Any]]:
+        """Real per-provider aggregates across every `ai_messages`
+        assistant row ever recorded — requests, tokens, cost, errors,
+        average latency — for Sprint 15.5's Provider Dashboard."""
+        rows = self._connection.execute(
+            """
+            SELECT provider, model, status, prompt_tokens, completion_tokens, latency_ms
+            FROM ai_messages
+            WHERE role = 'assistant' AND provider IS NOT NULL
+            """
+        ).fetchall()
+
+        by_provider: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            provider = row["provider"]
+            bucket = by_provider.setdefault(
+                provider,
+                {
+                    "requests": 0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "estimated_cost_usd": 0.0,
+                    "errors": 0,
+                    "_latencies": [],
+                },
+            )
+            bucket["requests"] += 1
+            if row["status"] == "error":
+                bucket["errors"] += 1
+            prompt_tokens = row["prompt_tokens"] or 0
+            completion_tokens = row["completion_tokens"] or 0
+            bucket["prompt_tokens"] += prompt_tokens
+            bucket["completion_tokens"] += completion_tokens
+            if row["model"]:
+                cost = estimate_cost_usd(provider, row["model"], prompt_tokens, completion_tokens)
+                if cost is None:
+                    bucket["estimated_cost_usd"] = None
+                elif bucket["estimated_cost_usd"] is not None:
+                    bucket["estimated_cost_usd"] += cost
+            if row["latency_ms"] is not None:
+                bucket["_latencies"].append(row["latency_ms"])
+
+        result: dict[str, dict[str, Any]] = {}
+        for provider, bucket in by_provider.items():
+            latencies = bucket.pop("_latencies")
+            bucket["avg_latency_ms"] = sum(latencies) / len(latencies) if latencies else None
+            result[provider] = bucket
+        return result

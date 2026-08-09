@@ -1,23 +1,32 @@
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
-import { useTheme } from '../../theme/useTheme';
 import { IconButton } from '../common/IconButton';
-import { AiProviderSettings } from './AiProviderSettings';
-import {
-  getAutoSaveEnabled,
-  getWordWrapEnabled,
-  setAutoSaveEnabled,
-  setWordWrapEnabled,
-} from '../../settings/editorSettings';
+import { GeneralSettingsTab } from './GeneralSettingsTab';
+import { EditorSettingsTab } from './EditorSettingsTab';
+import { AiProvidersTab } from './AiProvidersTab';
+import { ModelsTab } from './ModelsTab';
+import { UsageTab } from './UsageTab';
+import { SecurityTab } from './SecurityTab';
+import { AboutTab } from './AboutTab';
 
 interface SettingsModalProps {
   onClose: () => void;
 }
 
+const TABS = [
+  { id: 'general', label: 'General' },
+  { id: 'editor', label: 'Editor' },
+  { id: 'providers', label: 'AI Providers' },
+  { id: 'models', label: 'Models' },
+  { id: 'usage', label: 'Usage' },
+  { id: 'security', label: 'Security' },
+  { id: 'about', label: 'About' },
+] as const;
+
+type TabId = (typeof TABS)[number]['id'];
+
 export function SettingsModal({ onClose }: SettingsModalProps) {
-  const { theme, setTheme } = useTheme();
-  const [autoSave, setAutoSave] = useState(getAutoSaveEnabled);
-  const [wordWrap, setWordWrap] = useState(getWordWrapEnabled);
+  const [activeTab, setActiveTab] = useState<TabId>('general');
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -35,7 +44,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
       onClick={onClose}
     >
       <div
-        className="flex max-h-[85vh] w-full max-w-md flex-col rounded-lg border border-border bg-surface-elevated shadow-xl"
+        className="flex h-[80vh] w-full max-w-3xl flex-col rounded-lg border border-border bg-surface-elevated shadow-xl"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
@@ -44,73 +53,31 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
             <X size={16} />
           </IconButton>
         </div>
-        <div className="space-y-4 overflow-y-auto px-4 py-4">
-          <div>
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-fg-muted">
-              Appearance
-            </h3>
-            <div className="flex gap-2">
+        <div className="flex min-h-0 flex-1">
+          <nav className="w-40 shrink-0 space-y-0.5 overflow-y-auto border-r border-border p-2">
+            {TABS.map((tab) => (
               <button
+                key={tab.id}
                 type="button"
-                onClick={() => setTheme('dark')}
-                className={`flex-1 rounded-md border px-3 py-2 text-sm ${
-                  theme === 'dark'
-                    ? 'border-accent bg-accent/10 text-fg'
-                    : 'border-border text-fg-muted hover:text-fg'
+                onClick={() => setActiveTab(tab.id)}
+                className={`w-full rounded-md px-2.5 py-1.5 text-left text-xs font-medium ${
+                  activeTab === tab.id
+                    ? 'bg-accent/10 text-accent'
+                    : 'text-fg-muted hover:bg-surface hover:text-fg'
                 }`}
               >
-                Dark
+                {tab.label}
               </button>
-              <button
-                type="button"
-                onClick={() => setTheme('light')}
-                className={`flex-1 rounded-md border px-3 py-2 text-sm ${
-                  theme === 'light'
-                    ? 'border-accent bg-accent/10 text-fg'
-                    : 'border-border text-fg-muted hover:text-fg'
-                }`}
-              >
-                Light
-              </button>
-            </div>
-          </div>
-          <div>
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-fg-muted">
-              Editor
-            </h3>
-            <div className="space-y-2">
-              <label className="flex items-center justify-between text-sm text-fg">
-                Auto Save
-                <input
-                  type="checkbox"
-                  checked={autoSave}
-                  onChange={(event) => {
-                    setAutoSave(event.target.checked);
-                    setAutoSaveEnabled(event.target.checked);
-                  }}
-                />
-              </label>
-              <label className="flex items-center justify-between text-sm text-fg">
-                Word Wrap
-                <input
-                  type="checkbox"
-                  checked={wordWrap}
-                  onChange={(event) => {
-                    setWordWrap(event.target.checked);
-                    setWordWrapEnabled(event.target.checked);
-                  }}
-                />
-              </label>
-            </div>
-          </div>
-          <div>
-            <AiProviderSettings />
-          </div>
-          <div>
-            <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-fg-muted">
-              About
-            </h3>
-            <p className="text-sm text-fg-muted">NEMI AI STUDIO — v0.1.0</p>
+            ))}
+          </nav>
+          <div className="min-w-0 flex-1 overflow-y-auto p-4">
+            {activeTab === 'general' && <GeneralSettingsTab />}
+            {activeTab === 'editor' && <EditorSettingsTab />}
+            {activeTab === 'providers' && <AiProvidersTab />}
+            {activeTab === 'models' && <ModelsTab />}
+            {activeTab === 'usage' && <UsageTab />}
+            {activeTab === 'security' && <SecurityTab />}
+            {activeTab === 'about' && <AboutTab />}
           </div>
         </div>
       </div>

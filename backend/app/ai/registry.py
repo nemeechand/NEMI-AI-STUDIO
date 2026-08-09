@@ -5,11 +5,24 @@ from app.ai.providers.anthropic_provider import AnthropicProvider
 from app.ai.providers.base import AIProvider
 from app.ai.providers.gemini_provider import GeminiProvider
 from app.ai.providers.ollama_provider import OllamaProvider
-from app.ai.providers.openai_provider import OpenAIProvider
+from app.ai.providers.openai_compatible import (
+    CustomProvider,
+    DeepSeekProvider,
+    GrokProvider,
+    OpenAIProvider,
+)
 
 _PROVIDERS: dict[str, AIProvider] = {
     p.id: p
-    for p in (OpenAIProvider(), AnthropicProvider(), GeminiProvider(), OllamaProvider())
+    for p in (
+        OpenAIProvider(),
+        AnthropicProvider(),
+        GeminiProvider(),
+        OllamaProvider(),
+        DeepSeekProvider(),
+        GrokProvider(),
+        CustomProvider(),
+    )
 }
 
 

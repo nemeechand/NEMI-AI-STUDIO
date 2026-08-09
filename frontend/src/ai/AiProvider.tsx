@@ -8,6 +8,7 @@ import {
   type TokenUsageTotals,
 } from './ai-context';
 import { defaultModelFor } from './providerDefaults';
+import { estimateCostUsd } from './pricing';
 
 const PROVIDER_STORAGE_KEY = 'nemi.ai.selectedProvider';
 const MODEL_STORAGE_KEY = 'nemi.ai.selectedModel';
@@ -27,6 +28,9 @@ export function AiProvider({ children }: { children: ReactNode }) {
   const [providers, setProviders] = useState<AiProviderInfo[]>([]);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [configuredProviders, setConfiguredProviders] = useState<Set<string>>(new Set());
+  const [providerSettingsMap, setProviderSettingsMap] = useState<Record<string, ProviderSettings>>(
+    {},
+  );
 
   const [selectedProvider, setSelectedProviderState] = useState<string>(readStoredProvider);
   const [selectedModel, setSelectedModelState] = useState<string>(() =>
@@ -74,6 +78,18 @@ export function AiProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refreshConfiguredProviders();
   }, [refreshConfiguredProviders]);
+
+  // Sprint 15.5: each provider's configured base URL lives in
+  // `provider_settings` (Settings → AI Providers), not per-message state —
+  // loaded once here so `doSend` can attach it automatically.
+  const refreshProviderSettings = useCallback(async () => {
+    const list = await window.nemi.providers.listSettings();
+    setProviderSettingsMap(Object.fromEntries(list.map((row) => [row.provider_id, row])));
+  }, []);
+
+  useEffect(() => {
+    void refreshProviderSettings();
+  }, [refreshProviderSettings]);
 
   useEffect(() => {
     if (selectedProvider !== 'ollama') return;
@@ -226,6 +242,7 @@ export function AiProvider({ children }: { children: ReactNode }) {
           start_line: a.startLine ?? null,
           end_line: a.endLine ?? null,
         })),
+        latency_ms: null,
         created_at: new Date().toISOString(),
       };
       setActiveMessages((prev) => [...prev, optimisticMessage]);
@@ -236,6 +253,7 @@ export function AiProvider({ children }: { children: ReactNode }) {
           content: trimmed,
           provider: selectedProvider,
           model: selectedModel,
+          baseUrl: providerSettingsMap[selectedProvider]?.base_url ?? null,
           contextRefs: attachments.map((a) => ({
             path: a.path,
             content: a.content,
@@ -261,7 +279,14 @@ export function AiProvider({ children }: { children: ReactNode }) {
         setConversations(updatedList);
       }
     },
-    [activeConversationId, isStreaming, projectId, selectedModel, selectedProvider],
+    [
+      activeConversationId,
+      isStreaming,
+      projectId,
+      selectedModel,
+      selectedProvider,
+      providerSettingsMap,
+    ],
   );
 
   const sendMessage = useCallback(
@@ -311,6 +336,30 @@ export function AiProvider({ children }: { children: ReactNode }) {
     );
   }, [activeMessages]);
 
+  const conversationEstimatedCostUsd = useMemo<number | null>(() => {
+    let total = 0;
+    for (const message of activeMessages) {
+      if (message.role !== 'assistant' || !message.provider || !message.model) continue;
+      const cost = estimateCostUsd(
+        message.provider,
+        message.model,
+        message.prompt_tokens ?? 0,
+        message.completion_tokens ?? 0,
+      );
+      if (cost === null) return null;
+      total += cost;
+    }
+    return total;
+  }, [activeMessages]);
+
+  const lastResponseMs = useMemo<number | null>(() => {
+    for (let i = activeMessages.length - 1; i >= 0; i -= 1) {
+      const message = activeMessages[i];
+      if (message.role === 'assistant' && message.latency_ms != null) return message.latency_ms;
+    }
+    return null;
+  }, [activeMessages]);
+
   const value = useMemo<AiContextValue>(
     () => ({
       providers,
@@ -349,6 +398,8 @@ export function AiProvider({ children }: { children: ReactNode }) {
       streamingText,
       lastError,
       conversationTokenTotals,
+      conversationEstimatedCostUsd,
+      lastResponseMs,
       askAboutSelection,
       onRequestOpenPanel,
       openConversation,
@@ -373,6 +424,8 @@ export function AiProvider({ children }: { children: ReactNode }) {
       streamingText,
       lastError,
       conversationTokenTotals,
+      conversationEstimatedCostUsd,
+      lastResponseMs,
       askAboutSelection,
       onRequestOpenPanel,
       openConversation,

@@ -504,6 +504,32 @@ Verified: tsc build, eslint (0 warnings), prettier (clean, except the same pre-e
 
 Known limitation: the Documentation Engine and Test Engine's live, end-to-end, model-dependent success (as opposed to their graceful-skip paths and their deterministic API-level correctness) was not captured in this session's live pass, since it requires the small local test model to first succeed at milestone decomposition — the same probabilistic dependency Sprint 12/13's own live tests already documented and accepted. Rollback is per-task, not a whole-workflow atomic transaction. No in-app git commit/push action (unchanged since Sprint 13). The Developer agent still cannot propose file deletions (unchanged since Sprint 11) — `files_removed` in the Feature Approval summary is always empty, stated honestly rather than omitted. Code-signing certificate for the installer remains the top Beta blocker, unaffected by this sprint.
 
+Sprint 15.5 — Completed (AI Provider Management)
+
+Goal:
+
+Replace the incomplete single-page Settings panel with a production-quality, seven-provider AI Provider Management system: enable/disable, API key, base URL, default model, refresh models, test connection, last connection status, last used time, usage/cost statistics per provider; automatic Ollama detection/model management; a Model Manager (search/filter/favorites/default/last-used) per provider; a tabbed Settings UI (General/Editor/AI Providers/Models/Usage/Security/About); a real Provider Dashboard; per-agent-role Provider Switching; and AI Chat provider-switching plus cost/response-time display — preserving Sprints 1–15.
+
+Delivered:
+
+Provider layer extended from four to seven providers: OpenAI, Anthropic, Gemini, Ollama, DeepSeek, Grok (xAI), and a user-defined Custom OpenAI-compatible endpoint. DeepSeek/Grok/Custom (and OpenAI itself, refactored in) are thin subclasses of a new `OpenAICompatibleProvider` (`backend/app/ai/providers/openai_compatible.py`) — one real streaming/error-handling implementation shared by all four, since they speak the identical OpenAI Chat Completions wire protocol; Custom has no honest default base URL, so it raises a clear error rather than silently hitting the real OpenAI API when unconfigured. Every provider gained two new real capabilities: `test_connection()` (a real, cheap models-list call — Ollama reuses its existing real `/api/tags` check — never fabricated, never raises) and `list_models()` (a real live catalog where the SDK supports it; empty, an honest "no such capability," where it doesn't). `base_url` is now a first-class field end-to-end (Settings → `provider_settings.base_url` → attached automatically to every chat send and every orchestrated agent task).
+
+New tables — `provider_settings`, `model_favorites`, `agent_provider_defaults` — plus one additive `ai_messages.latency_ms` column. `agent_provider_defaults` is a genuinely new table (not a widened `agent_tasks.agent_role` CHECK constraint) since it needs a fifth `'documentation'` value that `agent_tasks.agent_role` deliberately still does not carry, continuing Sprint 15's own reasoning for keeping Documentation standalone. `create_milestone_pipelines()` and `generate_feature_documentation()` both now consult `agent_provider_defaults` per role, falling back to the workflow's own provider/model when no override exists — Provider Switching, wired all the way through.
+
+Ollama Management: real install detection (`shutil.which`), real server-reachability and model-list checks (`/api/tags`, now returning real sizes), real pull/delete (`/api/pull`/`/api/delete`) — surfaced via `GET/POST/DELETE /providers/ollama/*` and a new `OllamaManagementPanel.tsx`. Pulls are synchronous (await completion, return the final status), a stated honest limitation rather than a claimed live-progress feature.
+
+Settings UI rebuilt as a tabbed module (`SettingsModal.tsx` + seven new tab components) replacing the old single-panel `AiProviderSettings.tsx` (deleted). AI Providers tab: enable/disable, key, base URL, default model, Test Connection with real status badges. Models tab: search/filter, favorites (star), set-default, last-used badges, live Refresh against providers with a real catalog. Usage tab: a real Provider Dashboard (`GET /providers/dashboard`, aggregating `provider_settings` + a new `StatsRepository.provider_dashboard()` real per-provider requests/tokens/cost/latency/errors) and Provider Switching (five-role provider/model mapping). Security tab: a plain-language safeStorage explanation plus a real per-provider configured/remove-key list. AI Chat: `TokenUsageIndicator.tsx` now also shows an estimated cost (ported pricing table, `null` for unlisted models, never guessed) and the most recent real response time (`ai_messages.latency_ms`, captured via `time.monotonic()` in `_stream_and_persist()`); provider switching from Chat already existed (`ProviderSelector.tsx`, Sprint 10) and now lists all seven providers automatically.
+
+`frontend/electron/ai-credentials.ts`'s `ProviderId` extended to seven providers (same `safeStorage` mechanism, unchanged security model); a new `providers` IPC namespace (thirteenth, not an extension of an existing one — a genuinely new concern) added to `preload.ts`/`main.ts`/`electron-api.d.ts`, backed by a new `providers-client.ts`.
+
+No new live-testing bugs found (this sprint extended existing, already-proven infrastructure — schema migrations, IPC relay pattern, SSE streaming — rather than introducing new mechanisms); the one real environmental finding during live verification was a test-harness issue (a flawed `waitForFunction` health check in the verification script itself resolving before the backend's ~13–15s real cold-start SDK-import time elapsed), not a defect in the shipped code — fixed by retrying the real functional call instead of trusting the premature health signal.
+
+docs/ARCHITECTURE.md gained a new "AI PROVIDER MANAGEMENT (locked — Sprint 15.5)" section, a genuinely new thirteenth `providers` IPC namespace documented, six new locked-decision entries, version bumped to 2.3; docs/DATABASE_SCHEMA.md updated with the three new tables and `ai_messages.latency_ms`, version bumped to 1.9; docs/SPRINT_15_5_REPORT.md created.
+
+Verified: tsc build, eslint (0 warnings), prettier (clean, except the same pre-existing unrelated `tsconfig.json` warning), vite build; pytest (161 passed including 25 new, no skips), ruff check (all checks passed), mypy strict (0 issues, 62 source files). Live Playwright verification (real Ollama, no mocks) against the built app: all 7 providers registered with correct `supports_base_url` reporting; provider settings CRUD round trip; Test Connection honestly reporting failure with no key configured; a real safeStorage roundtrip (set/has/clear) plus direct confirmation the on-disk encrypted credentials file never contains the raw key text; model favorites add/remove; agent provider defaults set/list/clear; the Provider Dashboard returning real aggregates for all 7 providers; real Ollama status against both an unreachable host (graceful `server_running: false`) and the real local server (2 real installed models with real sizes); all 7 Settings tabs rendering and clickable; the AI Providers tab showing Test Connection buttons for all 7 providers; the Usage tab showing the Provider Dashboard and Provider Switching sections. Full Sprint 1–15 regression pass in the same session: all sidebar panels present (Project Explorer, Workspace Manager, Agents, Knowledge), backend health reachable at session end, `agents:list`/`workflows:list`/`knowledge:list-embedding-providers` all reachable through the real IPC boundary — 26/26 live checks passed.
+
+Known limitation: real-time streamed Ollama pull progress is not implemented (synchronous pull only, stated above). DeepSeek/Grok are deliberately absent from the cost-estimate pricing table — no confident current published rates at implementation time, preserving the "unknown beats fabricated" rule an unlisted model already followed. Provider Switching is per agent-role, not per task instance. Code-signing certificate for the installer remains the top Beta blocker, unaffected by this sprint.
+
 ---
 
 # CURRENT STATUS
@@ -778,6 +804,12 @@ Rollback is per-task, not a whole-workflow atomic transaction (Sprint 15) — de
 
 The Developer agent still cannot propose file deletions (unchanged since Sprint 11) — the Feature Approval summary's `files_removed` is always empty, stated honestly rather than omitted
 
+Ollama model pulls are synchronous, not progress-streamed to the UI (Sprint 15.5) — the SSE infrastructure a future streaming version would reuse already exists
+
+DeepSeek/Grok are absent from the cost-estimate pricing table (Sprint 15.5) — no confident current published rates at implementation time; reports `null`, never a guessed number
+
+Provider Switching is per agent-role, not per task instance (Sprint 15.5) — a five-row Settings mapping, not per-run overrides
+
 ---
 
 # AI TEAM
@@ -950,13 +982,15 @@ Sprint 14 Completed — Knowledge Graph & AI Memory Engine: a relational knowled
 
 Sprint 15 Completed — Autonomous Coding Engine: built almost entirely by extending Sprints 11–14's existing Agent Orchestration Framework, Workflow Engine, and Knowledge Graph — a "Feature Execution Engine" request is a Sprint 12 workflow goal, no new intake mechanism; the milestone-decomposition prompt now asks for affected/new files and DB/API/UI/doc/test implications per milestone (prompt-only, parser untouched); Developer/Reviewer tasks are grounded with real Knowledge Graph keyword matches and real Impact Analysis dependency/risk data, giving the `agents/*.md` prompts' existing "read existing files first"/"risk level" instructions something real to act on; new `file_snapshots` table backs a real Safe Change Engine and Rollback System (`GET/POST .../rollback-info`, `.../mark-rolled-back`), which also closed a real pre-existing gap where the manual Apply button never called the backend at all; a Test Engine reuses Sprint 13's real `build.runTests()`, persisting a real result on the workflow; a Documentation Engine gives `agents/documentation.md` its first real consumer — a standalone, strictly-fact-grounded LLM call (deliberately not a fifth orchestrated role, avoiding a CHECK-constraint migration) — whose real output the frontend writes to `CHANGELOG.md`, a per-feature doc file, and conditionally `PROJECT_MEMORY.md`/`ARCHITECTURE.md`; a new Feature Approval summary endpoint assembles real changed/created files, real test results, and a real aggregated risk level; found and fixed one real pre-existing gap (the manual Apply button) during implementation — verified via live Playwright testing (real indexing, a real Developer task driven through two live local-model runs, real test-result/summary round trips through the actual Electron IPC boundary, the rollback-info 404 path confirmed live, the full Apply→Rollback round trip deterministically proven by new backend tests), a full Sprint 1–14 regression pass, and the full offline suite; resolves the "implement a complete feature end to end" work this platform's vision has been building toward since Sprint 11
 
+Sprint 15.5 Completed — AI Provider Management: replaces the incomplete single-page Settings panel with a production-quality seven-provider system — OpenAI, Anthropic, Gemini, Ollama, DeepSeek, Grok (xAI), and a user-defined Custom OpenAI-compatible endpoint, the latter three (plus OpenAI itself, refactored in) sharing one real `OpenAICompatibleProvider` implementation since they speak the identical wire protocol; every provider gained real `test_connection()` (cheap models-list call, never fabricated, never raises) and `list_models()` (real live catalog where supported, honest empty list where not); `base_url` is now first-class end-to-end (Settings → `provider_settings` → every chat send and orchestrated agent task); three new tables (`provider_settings`, `model_favorites`, `agent_provider_defaults`) plus additive `ai_messages.latency_ms`; `agent_provider_defaults` deliberately a new table rather than a widened `agent_tasks.agent_role` CHECK constraint, continuing Sprint 15's own reasoning; Provider Switching wires `agent_provider_defaults` into both `create_milestone_pipelines()` and `generate_feature_documentation()`; real Ollama install/server/model-list/pull/delete management; Settings rebuilt as a 7-tab module (General/Editor/AI Providers/Models/Usage/Security/About) with a real Provider Dashboard aggregating real `ai_messages` stats; AI Chat gained real estimated-cost and response-time display; a new `providers` IPC namespace (thirteenth); found no new code defects (extended already-proven infrastructure) — the one real finding was a flawed health-check timing assumption in the verification script itself, not the shipped code — verified via 161 passing pytest (25 new), full offline suite, and a 26-point live Playwright pass (all 7 providers, safeStorage roundtrip with on-disk encryption confirmed, test-connection/favorites/agent-defaults/dashboard/Ollama-status round trips, all 7 Settings tabs, full Sprint 1–15 regression); resolves the "incomplete Settings page" gap flagged ahead of Sprint 16
+
 ---
 
 # NEXT MILESTONE
 
 Sprint 16
 
-Code-signing certificate for the installer — still the top remaining Beta blocker, unaffected by Sprint 15
+Code-signing certificate for the installer — still the top remaining Beta blocker, unaffected by Sprint 15/15.5
 
 True concurrent multi-project support (simultaneous open projects, not just switching) — deliberately deferred in Sprint 7; would require a per-project filesystem watcher map and a multi-root Explorer UI
 
@@ -967,6 +1001,10 @@ Turning embedding generation into a cancellable background job with progress rep
 A true multi-language AST parser for code indexing (Sprint 14's parser is heuristic/regex-based, Python/JS/TS only) — would improve Knowledge Graph/Code Impact Analysis and Sprint 15's agent-grounding accuracy on other languages and on scope-sensitive constructs
 
 Whole-workflow atomic rollback (Sprint 15 shipped per-task rollback only) — would let a multi-milestone feature be undone as a single unit
+
+Real-time streamed Ollama pull progress (Sprint 15.5 shipped a synchronous pull only) — would give the Model Manager a live download progress bar
+
+A live-fetched or confidently-sourced DeepSeek/Grok pricing table (Sprint 15.5 deliberately left them out of cost estimation) — would extend real cost tracking to all seven providers
 
 ---
 

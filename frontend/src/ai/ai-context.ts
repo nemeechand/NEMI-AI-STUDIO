@@ -48,6 +48,13 @@ export interface AiContextValue {
   streamingText: string;
   lastError: string | null;
   conversationTokenTotals: TokenUsageTotals;
+  /** Real cost estimate (from the same published-rate table the backend
+   * uses) for the active conversation's token totals, or `null` when the
+   * selected model isn't in the pricing table — never a guessed number. */
+  conversationEstimatedCostUsd: number | null;
+  /** Wall-clock response time (ms) of the most recent completed assistant
+   * reply in the active conversation, or `null` before any reply. */
+  lastResponseMs: number | null;
 
   /** Opens the chat panel (if collapsed), optionally seeding the input and
    * attaching a code selection — the single entry point every editor

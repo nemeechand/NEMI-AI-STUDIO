@@ -17,12 +17,27 @@ def _default_agents_dir() -> Path:
     these are static bundled content, not per-user data, so they don't
     need an env var from Electron: the backend can self-detect whether
     it's a frozen PyInstaller build (`sys.frozen`) the same way it would
-    for any bundled read-only resource. `nemi-backend.spec` copies
-    `agents/` next to the built executable for exactly this lookup;
-    dev mode reads the real repo-root `agents/` directly.
+    for any bundled read-only resource. `nemi-backend.spec` bundles
+    `agents/` as a `datas` entry.
+
+    Found live during Sprint 15.7's Alpha build verification: this
+    previously assumed `agents/` lands directly next to the built
+    executable, which was true under PyInstaller's pre-6.0 onedir
+    layout but silently broke once PyInstaller 6 introduced the
+    `_internal/` contents directory as the default home for every
+    bundled binary *and* `datas` file — `agents:list` returned empty in
+    every packaged build because `seed_from_role_files()` found no
+    `.md` files at the (wrong) guessed path. `sys._MEIPASS` is
+    PyInstaller's own documented, version-independent way to find
+    where bundled data actually lives at runtime (the `_internal`
+    folder for onedir, a temp extraction dir for onefile) — using it
+    instead of hand-constructing the path fixes this regardless of
+    which PyInstaller layout is in effect.
     """
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent / "agents"
+        meipass = getattr(sys, "_MEIPASS", None)
+        base = Path(meipass) if meipass else Path(sys.executable).parent
+        return base / "agents"
     return _REPO_ROOT / "agents"
 
 

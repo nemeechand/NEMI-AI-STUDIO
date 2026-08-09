@@ -59,13 +59,6 @@ class WorkflowsRepository:
         ).fetchall()
         return [_row_to_dict(row) for row in rows]
 
-    def set_conversation_id(self, workflow_id: str, conversation_id: str) -> None:
-        self._connection.execute(
-            "UPDATE workflows SET conversation_id = ?, updated_at = ? WHERE id = ?",
-            (conversation_id, datetime.now(UTC).isoformat(), workflow_id),
-        )
-        self._connection.commit()
-
     def set_status(
         self, workflow_id: str, status: WorkflowStatus, *, error_message: str | None = None
     ) -> None:

@@ -1,7 +1,7 @@
 import { WelcomeHeader } from './WelcomeHeader';
 import { QuickActionsCard } from './QuickActionsCard';
 import { RecentProjectsCard } from './RecentProjectsCard';
-import { SprintStatusCard } from './SprintStatusCard';
+import { SystemHealthCard } from './SystemHealthCard';
 import { AITeamCard } from './AITeamCard';
 import { TechStackCard } from './TechStackCard';
 
@@ -17,7 +17,7 @@ export function Dashboard({ onOpenSettings, onNewProject }: DashboardProps) {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <QuickActionsCard onOpenSettings={onOpenSettings} onNewProject={onNewProject} />
         <RecentProjectsCard />
-        <SprintStatusCard />
+        <SystemHealthCard />
         <AITeamCard />
         <TechStackCard />
       </div>

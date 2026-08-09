@@ -1,13 +1,16 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   getBackendHealth,
   getBackendResourceUsage,
+  restartBackend,
   startBackend,
   stopBackend,
 } from './backend-process';
 import {
+  fetchFullHealth,
   fetchRecentLogs,
   fetchRecentProjects,
   recordProjectOpened,
@@ -112,6 +115,26 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Sprint 15.6: `app.getVersion()` only reliably reads package.json's
+// `version` field once the app is packaged (electron-builder embeds it
+// into app.asar) — confirmed live during a production-stabilization
+// audit that in dev mode it silently falls back to Electron's OWN
+// version instead (e.g. "32.3.3"), which both StatusBar and the About
+// tab would then have shown as the app's version. `app.getVersion()`
+// has no public setter, so `app:get-info` (below) reads this resolved
+// value directly instead of calling `app.getVersion()` at all.
+function resolveAppVersion(): string {
+  try {
+    const packageJsonPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'app.asar', 'package.json')
+      : path.join(__dirname, '..', 'package.json');
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as { version: string };
+    return packageJson.version;
+  } catch {
+    return app.getVersion();
+  }
+}
+
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 
 let mainWindow: BrowserWindow | null = null;
@@ -185,6 +208,20 @@ ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() ?? false);
 
 ipcMain.handle('backend:health', () => getBackendHealth());
 ipcMain.handle('backend:logs', (_event, limit?: number) => fetchRecentLogs(limit));
+ipcMain.handle('backend:get-full-health', () => fetchFullHealth());
+ipcMain.handle('backend:restart', () => restartBackend());
+// Sprint 15.6: one real source of truth for the running app's version —
+// `app.getVersion()` reads package.json's `version` field, the same
+// value electron-builder stamps into the installer/portable artifact
+// names, rather than a second hand-maintained copy (About tab previously
+// had its own hardcoded string that had already drifted from it).
+ipcMain.handle('app:get-info', () => ({
+  appVersion: resolveAppVersion(),
+  electronVersion: process.versions.electron,
+  chromeVersion: process.versions.chrome,
+  nodeVersion: process.versions.node,
+  platform: process.platform,
+}));
 
 ipcMain.handle('fs:select-project-folder', () => {
   if (!mainWindow) return null;
@@ -495,7 +532,21 @@ let agentCycleTimer: ReturnType<typeof setInterval> | null = null;
  * itself never persists or caches a key (Sprint 10's locked decision).
  * Ollama needs no key and is unaffected by whether any are configured.
  */
+// Sprint 15.6: without this guard, an overlapping cycle (any batch of
+// tasks that takes longer than AGENT_RUN_CYCLE_INTERVAL_MS to run — routine
+// for a cloud LLM call) let `setInterval` fire a second `runAgentCycleOnce()`
+// on top of the first, found during a production-stabilization audit.
+// `AgentTasksRepository.mark_running()`'s atomic `WHERE status = 'queued'`
+// claim (backend/app/db/repositories/agent_tasks_repository.py) already
+// makes double-execution of the *same* task impossible even without this,
+// but skipping the overlap entirely also avoids exceeding the intended
+// `MAX_CONCURRENT_TASKS` cap and avoids pointless duplicate `/agents/
+// run-cycle` traffic while a batch is still in flight.
+let agentCycleInProgress = false;
+
 async function runAgentCycleOnce(): Promise<void> {
+  if (agentCycleInProgress) return;
+  agentCycleInProgress = true;
   try {
     const apiKeys: Record<string, string> = {};
     for (const provider of AGENT_CYCLE_PROVIDERS) {
@@ -509,32 +560,68 @@ async function runAgentCycleOnce(): Promise<void> {
   } catch {
     // Backend not reachable yet (e.g. still starting) — harmless, the
     // next tick tries again. No state is lost: tasks just stay 'queued'.
+  } finally {
+    agentCycleInProgress = false;
   }
 }
 
-app.whenReady().then(() => {
-  createMainWindow();
-  startBackend(__dirname);
-  setChangeListener((event) => {
-    mainWindow?.webContents.send('fs:changed', event);
+// Sprint 15.6: without this, launching NEMI AI Studio a second time (a
+// double-click, a second Start Menu launch while the first is still open)
+// silently spawned a second Electron process, which spawned its own
+// backend that failed to bind the already-held port 8756 — a fully
+// interactive but permanently backend-less second window, confirmed
+// during a production-stabilization audit. `requestSingleInstanceLock()`
+// makes the second launch hand off to the first instance instead.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
   });
-  agentCycleTimer = setInterval(() => void runAgentCycleOnce(), AGENT_RUN_CYCLE_INTERVAL_MS);
-});
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
-
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
+  app.whenReady().then(() => {
     createMainWindow();
-  }
-});
+    startBackend(__dirname);
+    setChangeListener((event) => {
+      mainWindow?.webContents.send('fs:changed', event);
+    });
+    agentCycleTimer = setInterval(() => void runAgentCycleOnce(), AGENT_RUN_CYCLE_INTERVAL_MS);
+  });
 
-app.on('before-quit', () => {
-  stopBackend();
-  closeProject();
-  if (agentCycleTimer) clearInterval(agentCycleTimer);
-});
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
+      app.quit();
+    }
+  });
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createMainWindow();
+    }
+  });
+
+  // Sprint 15.6: quit needs to actually wait for stopBackend()'s graceful
+  // shutdown (POST /shutdown, then a bounded wait for real process exit)
+  // before Electron tears the process down — a bare `before-quit` handler
+  // can't do that, since returning a Promise from the listener doesn't
+  // pause quit. This is the standard Electron pattern for async
+  // quit-time cleanup: intercept the first request, run cleanup, then
+  // call `app.quit()` again (the `isQuitting` guard lets that second
+  // call proceed instead of re-entering this same handler forever).
+  let isQuitting = false;
+  app.on('before-quit', (event) => {
+    if (isQuitting) return;
+    event.preventDefault();
+    isQuitting = true;
+    void (async () => {
+      if (agentCycleTimer) clearInterval(agentCycleTimer);
+      await stopBackend();
+      closeProject();
+      app.quit();
+    })();
+  });
+}

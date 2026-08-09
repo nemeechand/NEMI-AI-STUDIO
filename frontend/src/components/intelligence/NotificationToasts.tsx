@@ -16,6 +16,7 @@ export function NotificationToasts() {
   const { notifications } = useIntelligence();
   const [visibleIds, setVisibleIds] = useState<string[]>([]);
   const knownIds = useRef<Set<string>>(new Set());
+  const timers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
 
   useEffect(() => {
     const fresh = notifications.filter((n) => !knownIds.current.has(n.id));
@@ -25,11 +26,26 @@ export function NotificationToasts() {
     }
     setVisibleIds((prev) => [...prev, ...fresh.map((n) => n.id)]);
     for (const notification of fresh) {
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        timers.current.delete(timer);
         setVisibleIds((prev) => prev.filter((id) => id !== notification.id));
       }, TOAST_VISIBLE_MS);
+      timers.current.add(timer);
     }
   }, [notifications]);
+
+  // Sprint 15.6: without this, a toast's fade-out timer fired after the
+  // Live Dashboard closed (unmounting this component) still called
+  // setVisibleIds on state no one would ever read again — a real,
+  // if bounded (max 6s), leak found during a production-stabilization
+  // audit.
+  useEffect(() => {
+    const activeTimers = timers.current;
+    return () => {
+      for (const timer of activeTimers) clearTimeout(timer);
+      activeTimers.clear();
+    };
+  }, []);
 
   const visible = notifications.filter((n) => visibleIds.includes(n.id)).slice(0, 3);
   if (visible.length === 0) return null;

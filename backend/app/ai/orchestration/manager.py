@@ -96,7 +96,10 @@ async def _run_task(settings: Settings, task_id: str, api_keys: dict[str, str]) 
         task = tasks_repo.get(task_id)
         if task is None or task["status"] != "queued":
             return  # raced with a concurrent cycle or a cancellation
-        tasks_repo.mark_running(task_id)
+        if not tasks_repo.mark_running(task_id):
+            return  # another overlapping cycle claimed this task first
+        task = tasks_repo.get(task_id)
+        assert task is not None  # just updated it in the line above
 
     try:
         await _execute(settings, task, api_keys)

@@ -49,12 +49,6 @@ class AgentsRepository:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def get_by_id(self, agent_id: str) -> dict[str, Any] | None:
-        row = self._connection.execute(
-            "SELECT * FROM agents WHERE id = ?", (agent_id,)
-        ).fetchone()
-        return dict(row) if row else None
-
     def get_by_role_key(self, agents_dir: Path, role_key: str) -> dict[str, Any] | None:
         """Looks up a seeded agent row by its role file's key (e.g.
         "developer") rather than its display name — used by the task
@@ -67,14 +61,4 @@ class AgentsRepository:
         return dict(row) if row else None
 
 
-def get_system_prompt(agents_dir: Path, role_key: str) -> str | None:
-    """Direct role-file lookup, bypassing the DB — used wherever the
-    caller already knows the role key (e.g. the task manager building a
-    provider request) and doesn't need the seeded row's id/timestamps."""
-    for role in load_agent_roles(agents_dir):
-        if role.key == role_key:
-            return role.system_prompt
-    return None
-
-
-__all__ = ["AgentsRepository", "get_system_prompt", "AgentRole"]
+__all__ = ["AgentsRepository", "AgentRole"]

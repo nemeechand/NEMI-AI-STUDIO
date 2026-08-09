@@ -5,6 +5,7 @@ import {
   Brain,
   Cpu,
   GitBranch,
+  HeartPulse,
   History,
   PlayCircle,
   Terminal,
@@ -15,6 +16,7 @@ import {
 } from 'lucide-react';
 
 export type SectionId =
+  | 'health'
   | 'sprint'
   | 'agents'
   | 'workflow'
@@ -29,6 +31,7 @@ export type SectionId =
   | 'performance';
 
 export const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
+  { id: 'health', label: 'Health Center', icon: HeartPulse },
   { id: 'sprint', label: 'Sprint Center', icon: Activity },
   { id: 'agents', label: 'Agent Monitor', icon: Users },
   { id: 'workflow', label: 'Workflow View', icon: Workflow },

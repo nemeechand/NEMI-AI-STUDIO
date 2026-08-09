@@ -11,7 +11,7 @@ Founder:
 Nemee Chand Khichar
 
 Project Version:
-v0.1
+v0.1.0-alpha.1 (Sprint 15.6: kept in sync with frontend/package.json — see SPRINT_15_6_REPORT.md's version-consistency fix)
 
 Project Type:
 Enterprise AI Software Development Platform
@@ -530,6 +530,32 @@ Verified: tsc build, eslint (0 warnings), prettier (clean, except the same pre-e
 
 Known limitation: real-time streamed Ollama pull progress is not implemented (synchronous pull only, stated above). DeepSeek/Grok are deliberately absent from the cost-estimate pricing table — no confident current published rates at implementation time, preserving the "unknown beats fabricated" rule an unlisted model already followed. Provider Switching is per agent-role, not per task instance. Code-signing certificate for the installer remains the top Beta blocker, unaffected by this sprint.
 
+Sprint 15.6 — Completed (Production Stabilization & Release Readiness)
+
+Goal:
+
+Prepare NEMI AI Studio for its first stable production release — audit the full codebase first (never duplicate existing functionality), then stabilize startup/shutdown/recovery, ship one unified Health Center, verify security/performance, audit packaging, run full regression, and produce release-readiness documentation.
+
+Delivered:
+
+A full architectural audit (via four parallel research passes covering monitoring/status UI, backend, Electron process lifecycle, and frontend dead code) ran before any implementation, per this sprint's own explicit "audit first, reuse second, extend third" mandate — full findings recorded in SPRINT_15_6_REPORT.md. The audit found and this sprint fixed: a real resource leak (Gemini's `httpx.AsyncClient`, owned internally by the `google-genai` SDK, was never closed on any of `stream_chat`/`test_connection`/`list_models`/embeddings — every other provider was already correct); a real TOCTOU race in the agent-cycle scheduler (two overlapping 4-second polling cycles could both pass a `SELECT`-based "still queued" check before either `UPDATE` landed, double-claiming the same task) — fixed on both ends, `AgentTasksRepository.mark_running()` is now an atomic `UPDATE ... WHERE status='queued'` and Electron's `runAgentCycleOnce()` gained a reentrancy guard; no `PRAGMA busy_timeout`/WAL mode (added); no startup retry for a transiently locked database (added, 5 attempts/1s backoff); an always-forced (`TerminateProcess`-equivalent on Windows) backend shutdown that never let the FastAPI lifespan's own shutdown code run in practice — fixed with a real `POST /shutdown` → self-directed `signal.raise_signal(SIGINT)` → uvicorn's own graceful-shutdown path, confirmed live via the "NEMI backend shutting down" log line actually appearing for the first time; no automatic recovery from a mid-session backend crash (permanently degraded to "Backend Offline" until a full app relaunch) — fixed with up to 3 bounded automatic restart attempts plus a manual "Restart Backend" action; no `requestSingleInstanceLock()` at all (a second app launch silently opened a second, backend-less window) — fixed and verified live (a second launch attempt against the same profile fails to open a window while the first instance stays fully alive).
+
+Version consistency: found four different, three already-disagreeing version strings across the app (package.json, backend `__version__`, a hardcoded About-tab literal, and PROJECT_MEMORY.md's own field) — all reconciled to `0.1.0-alpha.1`. Found live that `app.getVersion()` silently falls back to Electron's own version in dev mode (no public `app.setVersion()` exists to correct it) — fixed by reading package.json directly via a new `app:get-info` IPC channel (added to the existing `backend` namespace, not a new one), which both the About tab and StatusBar now read instead of hand-maintained strings. Also removed a stale hardcoded "Sprint 6 — Stabilization" StatusBar label and replaced the Dashboard's `SprintStatusCard.tsx` (a hand-maintained sprint-history array frozen at "Sprint 3," a real, visible accuracy problem, not merely stale in principle) with `SystemHealthCard.tsx`, a real, live summary.
+
+Health Center: one new 13th Intelligence Center section (deliberately not a rival top-level dashboard), reusing `IntelligenceProvider`'s already-polled `systemMetrics`/`gitStatus`/`availableRunners`/`runners` and adding exactly one genuinely new data source, `GET /health/full` — a real backend-side aggregation (backend status, a real `SELECT 1` database check, real Python runtime version, a real AI-provider connected/error summary reusing the exact same repositories `/providers/dashboard` already calls, real Ollama install/server detection reusing the exact same functions `/providers/ollama/status` already calls, and a real short-timeout internet-connectivity check) — plus a client-computed Overall Health score from all thirteen real per-check states. The same audit found and trimmed the biggest concrete monitoring duplication in the app: `SprintProgressCenter.tsx` was independently re-polling both backend resource usage (already polled by `ResourceMonitorSection.tsx`) and backend logs (already polled by `LoggerPanel.tsx`/`TerminalSection.tsx`) — both removed in favor of pointing at the Health Center/Resources/Terminal.
+
+Dead code cleanup: five confirmed-zero-call-site repository methods/functions (`AgentsRepository.get_by_id`/`get_system_prompt`, `FilesRepository.get_by_path`, `WorkflowsRepository.set_conversation_id`) and two unused API response schemas (`AiConversationOut`, `AiMessageOut`, plus their now-orphaned supporting types) removed — verified via full-repo grep before removal and a full pytest pass after.
+
+Four new release-readiness documents created: RELEASE_CHECKLIST.md (the concrete steps to cut a release), KNOWN_ISSUES.md (every known limitation across the whole project, consolidated honestly from PROJECT_MEMORY.md's own PENDING TASKS history plus this sprint's own deferred findings), PRODUCTION_CHECKLIST.md (a standard reliability/observability/security/performance/packaging/documentation readiness matrix against this app's real current state), and VERSION_READINESS_REPORT.md (a go/no-go call: ready for a controlled alpha release, not yet for public/enterprise distribution — code-signing is the one disqualifying gap for a wider release).
+
+Found and fixed one real bug during this sprint's own live verification (not a pre-existing product defect, but worth recording): the first live-verification attempt of the "Restart Backend" button reported failure, traced to the verification script's own retry helper only retrying on thrown exceptions — `getBackendHealth()` never throws, it's a synchronous read of local state, so the check ran once, immediately, before the ~13-15s real cold-restart had time to complete. Fixed the test script to poll on the returned value instead; the restart mechanism itself was confirmed correct via direct process-log inspection (a clean 'starting' → 'ready' transition with a genuinely fresh process uptime) before the test-script bug was even identified.
+
+docs/ARCHITECTURE.md gained a new "PRODUCTION STABILIZATION & HEALTH CENTER (locked — Sprint 15.6)" section, five new locked-decision entries, version bumped to 2.4; docs/DATABASE_SCHEMA.md updated with the new connection-reliability pragmas and dead-code removals (no table/column changes), version bumped to 1.9.1; docs/SPRINT_15_6_REPORT.md created; four new release-readiness documents created (above).
+
+Verified: tsc build, eslint (0 warnings), prettier (clean, except the same pre-existing unrelated `tsconfig.json` warning), vite build; pytest (168 passed including 7 new, no skips), ruff check (all checks passed), mypy strict (0 issues, 62 source files). Live Playwright verification (real Ollama, no mocks) against the built app — 27/27 checks passed: real `GET /health/full` aggregation via IPC; real app/Electron/backend version info with no drift; StatusBar/About tab both showing the real version, the stale "Sprint 6" label confirmed gone; Dashboard showing the new System Health card with the stale Sprint Progress card confirmed gone; the Health Center rendering all 13 real checks plus an Overall Health summary; the manual Restart Backend action successfully returning the backend to a real 'ready' state; full Sprint 1–15.5 regression (all sidebar panels, provider dashboard, agents/workflows all reachable through the real IPC boundary). Additionally verified outside the main suite: single-instance enforcement (a second launch attempt against the same profile does not open a second window, confirmed via a real WebSocket-connection-reset on the second launch attempt while the first instance stayed alive) and a real graceful-shutdown round trip (direct `POST /shutdown` against a manually-run backend, confirmed via the real "NEMI backend shutting down" log line appearing for the first time in the project's history).
+
+Known limitation: no synthetic 10,000+ file load test was performed (verified instead at this repo's own real scale, ~2,000+ files, matching every prior sprint's practice of testing against real data). Two minor, low-impact duplications remain and were deliberately deferred rather than risk destabilizing already-correct panels under this sprint's time budget: a small ETA-calculation duplication between `SprintCenterSection.tsx`/`SprintProgressCenter.tsx`, and two unmemoized fuzzy-filter call sites (`QuickOpen.tsx`/`ChatInput.tsx`) not currently causing measured lag. Automatic backend crash recovery was verified via the manual Restart Backend action, not by inducing a real uncontrolled crash. Code-signing certificate for the installer remains the top release blocker, unaffected by this sprint — see VERSION_READINESS_REPORT.md for the full go/no-go assessment.
+
 ---
 
 # CURRENT STATUS
@@ -768,7 +794,7 @@ Sprint 1 Completed
 
 # PENDING TASKS
 
-Code-signing certificate for the installer (currently unsigned) — top remaining Beta blocker, unaffected by Sprint 15
+Code-signing certificate for the installer (currently unsigned) — top remaining Beta blocker, unaffected by Sprint 15/15.5/15.6 (see docs/VERSION_READINESS_REPORT.md)
 
 Workflow Design
 
@@ -809,6 +835,12 @@ Ollama model pulls are synchronous, not progress-streamed to the UI (Sprint 15.5
 DeepSeek/Grok are absent from the cost-estimate pricing table (Sprint 15.5) — no confident current published rates at implementation time; reports `null`, never a guessed number
 
 Provider Switching is per agent-role, not per task instance (Sprint 15.5) — a five-row Settings mapping, not per-run overrides
+
+No code-signing, no dependency vulnerability scanning, and no CI pipeline automating the offline verification suite (Sprint 15.6) — see docs/KNOWN_ISSUES.md and docs/RELEASE_CHECKLIST.md
+
+A small ETA-calculation duplication between `SprintCenterSection.tsx`/`SprintProgressCenter.tsx`, and two unmemoized fuzzy-filter call sites (`QuickOpen.tsx`/`ChatInput.tsx`) (Sprint 15.6's own audit) — both low real-world impact, deliberately deferred rather than risk destabilizing already-correct panels
+
+No synthetic 10,000+ file load test has been performed (Sprint 15.6) — verified instead at this repo's own real scale (~2,000+ files), matching every prior sprint's practice of testing against real data rather than a fabricated benchmark
 
 ---
 
@@ -984,13 +1016,15 @@ Sprint 15 Completed — Autonomous Coding Engine: built almost entirely by exten
 
 Sprint 15.5 Completed — AI Provider Management: replaces the incomplete single-page Settings panel with a production-quality seven-provider system — OpenAI, Anthropic, Gemini, Ollama, DeepSeek, Grok (xAI), and a user-defined Custom OpenAI-compatible endpoint, the latter three (plus OpenAI itself, refactored in) sharing one real `OpenAICompatibleProvider` implementation since they speak the identical wire protocol; every provider gained real `test_connection()` (cheap models-list call, never fabricated, never raises) and `list_models()` (real live catalog where supported, honest empty list where not); `base_url` is now first-class end-to-end (Settings → `provider_settings` → every chat send and orchestrated agent task); three new tables (`provider_settings`, `model_favorites`, `agent_provider_defaults`) plus additive `ai_messages.latency_ms`; `agent_provider_defaults` deliberately a new table rather than a widened `agent_tasks.agent_role` CHECK constraint, continuing Sprint 15's own reasoning; Provider Switching wires `agent_provider_defaults` into both `create_milestone_pipelines()` and `generate_feature_documentation()`; real Ollama install/server/model-list/pull/delete management; Settings rebuilt as a 7-tab module (General/Editor/AI Providers/Models/Usage/Security/About) with a real Provider Dashboard aggregating real `ai_messages` stats; AI Chat gained real estimated-cost and response-time display; a new `providers` IPC namespace (thirteenth); found no new code defects (extended already-proven infrastructure) — the one real finding was a flawed health-check timing assumption in the verification script itself, not the shipped code — verified via 161 passing pytest (25 new), full offline suite, and a 26-point live Playwright pass (all 7 providers, safeStorage roundtrip with on-disk encryption confirmed, test-connection/favorites/agent-defaults/dashboard/Ollama-status round trips, all 7 Settings tabs, full Sprint 1–15 regression); resolves the "incomplete Settings page" gap flagged ahead of Sprint 16
 
+Sprint 15.6 Completed — Production Stabilization & Release Readiness: a full architectural audit (monitoring/status UI, backend, Electron process lifecycle, frontend dead code) ran before any implementation, per this sprint's own "audit first, reuse second, extend third" mandate; found and fixed a real resource leak (Gemini's httpx client never closed), a real TOCTOU race in the agent-cycle scheduler (fixed with an atomic `mark_running()` UPDATE plus a reentrancy guard), no SQLite busy-timeout/WAL mode (added), no startup retry for a transiently locked database (added), an always-forced backend shutdown that never let the FastAPI lifespan's shutdown code run in practice (fixed with a real `POST /shutdown` → self-directed SIGINT → uvicorn's own graceful path, confirmed live via the shutdown log line finally appearing), no automatic or manual recovery from a mid-session backend crash (fixed with bounded auto-restart plus a manual Restart Backend action), and no single-instance lock at all (fixed and verified live — a second launch no longer opens a second, backend-less window); reconciled four disagreeing version strings across the app and found `app.getVersion()` unreliable in dev mode (fixed by reading package.json directly); replaced two pieces of stale/fabricated-looking UI (a hardcoded "Sprint 6" StatusBar label, and a Dashboard card frozen at "Sprint 3") with real, live data; shipped one new unified Health Center — a 13th Intelligence Center section, not a rival dashboard, reusing every existing real data source and adding exactly one new endpoint (`GET /health/full`) for what didn't exist anywhere yet — and trimmed the app's biggest concrete monitoring duplication (`SprintProgressCenter.tsx`'s own redundant resource/log polling); removed 5 confirmed-dead repository methods and 2 unused API schemas; produced four new release-readiness documents (RELEASE_CHECKLIST.md, KNOWN_ISSUES.md, PRODUCTION_CHECKLIST.md, VERSION_READINESS_REPORT.md); verified via 168 passing pytest (7 new), the full offline suite, and a 27-point live Playwright pass plus two additional standalone live checks (single-instance enforcement, a real graceful-shutdown round trip); verdict: ready for a controlled alpha release, code-signing remains the one gap for wider distribution
+
 ---
 
 # NEXT MILESTONE
 
 Sprint 16
 
-Code-signing certificate for the installer — still the top remaining Beta blocker, unaffected by Sprint 15/15.5
+Code-signing certificate for the installer — still the top remaining Beta blocker, unaffected by Sprint 15/15.5/15.6 (see docs/VERSION_READINESS_REPORT.md)
 
 True concurrent multi-project support (simultaneous open projects, not just switching) — deliberately deferred in Sprint 7; would require a per-project filesystem watcher map and a multi-root Explorer UI
 
@@ -1005,6 +1039,10 @@ Whole-workflow atomic rollback (Sprint 15 shipped per-task rollback only) — wo
 Real-time streamed Ollama pull progress (Sprint 15.5 shipped a synchronous pull only) — would give the Model Manager a live download progress bar
 
 A live-fetched or confidently-sourced DeepSeek/Grok pricing table (Sprint 15.5 deliberately left them out of cost estimation) — would extend real cost tracking to all seven providers
+
+A CI pipeline automating the offline verification suite (Sprint 15.6's RELEASE_CHECKLIST.md is still run entirely by hand) — would remove the risk of a manual step being skipped before a release
+
+Unifying the small remaining ETA-calculation duplication and memoizing the two fuzzy-filter call sites Sprint 15.6's audit found but deliberately deferred (see docs/KNOWN_ISSUES.md)
 
 ---
 

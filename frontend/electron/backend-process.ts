@@ -7,6 +7,7 @@ import {
   BACKEND_PORT,
   checkHealth,
   postLog,
+  requestGracefulShutdown,
   type HealthResponse,
 } from './backend-client';
 
@@ -22,11 +23,23 @@ export interface BackendHealth {
 
 const STARTUP_TIMEOUT_MS = 15_000;
 const POLL_INTERVAL_MS = 300;
+// Sprint 15.6: a mid-session crash (as opposed to a slow-but-eventually-
+// healthy cold start, which watchForLateRecovery already covers) now gets
+// a bounded number of automatic restart attempts with backoff, instead of
+// leaving the app permanently in "Backend Offline" until the user quits
+// and relaunches the whole thing.
+const MAX_AUTO_RESTART_ATTEMPTS = 3;
+const AUTO_RESTART_BACKOFF_MS = 2_000;
+// How long stopBackend() waits for a graceful shutdown (POST /shutdown +
+// the child actually exiting) before falling back to a forced kill.
+const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 3_000;
 
 let child: ChildProcess | null = null;
 let state: BackendState = 'stopped';
 let lastError: string | undefined;
 let lastHealth: HealthResponse | undefined;
+let lastElectronDirname: string | null = null;
+let autoRestartAttempts = 0;
 
 function resolveBackendDir(electronDirname: string): string {
   if (app.isPackaged) {
@@ -162,6 +175,7 @@ function forwardToLogger(level: 'DEBUG' | 'WARNING', source: string, chunk: Buff
 export function startBackend(electronDirname: string): void {
   if (child) return;
 
+  lastElectronDirname = electronDirname;
   state = 'starting';
   lastError = undefined;
 
@@ -208,9 +222,27 @@ export function startBackend(electronDirname: string): void {
 
   proc.on('exit', (code) => {
     child = null;
-    if (state !== 'stopped') {
-      state = 'error';
-      lastError = `Backend process exited unexpectedly (code ${code ?? 'unknown'})`;
+    if (state === 'stopped') return; // a deliberate stopBackend() call — not a crash
+    const wasReadyOrStarting = state === 'ready' || state === 'starting';
+    state = 'error';
+    lastError = `Backend process exited unexpectedly (code ${code ?? 'unknown'})`;
+    if (
+      wasReadyOrStarting &&
+      autoRestartAttempts < MAX_AUTO_RESTART_ATTEMPTS &&
+      lastElectronDirname
+    ) {
+      autoRestartAttempts += 1;
+      const attempt = autoRestartAttempts;
+      lastError = `Backend crashed — attempting automatic restart (${attempt}/${MAX_AUTO_RESTART_ATTEMPTS})…`;
+      const dirname = lastElectronDirname;
+      setTimeout(() => {
+        if (child) return; // something else already restarted it
+        startBackend(dirname);
+      }, AUTO_RESTART_BACKOFF_MS);
+    } else if (wasReadyOrStarting) {
+      lastError =
+        `Backend crashed and automatic restart failed ${MAX_AUTO_RESTART_ATTEMPTS} time(s). ` +
+        'Restart NEMI AI Studio to recover.';
     }
   });
 
@@ -219,6 +251,11 @@ export function startBackend(electronDirname: string): void {
       if (state === 'starting') {
         state = 'ready';
       }
+      // A real recovery — successfully healthy again — resets the crash
+      // counter, so a second, later, unrelated crash still gets its own
+      // full set of restart attempts rather than inheriting an earlier
+      // incident's exhausted budget.
+      autoRestartAttempts = 0;
     })
     .catch((error: unknown) => {
       state = 'error';
@@ -227,13 +264,59 @@ export function startBackend(electronDirname: string): void {
     });
 }
 
-export function stopBackend(): void {
+/**
+ * Stops the backend, preferring a real graceful shutdown (`POST
+ * /shutdown`, which delivers a real SIGINT the backend's own signal
+ * handler turns into an orderly uvicorn/FastAPI-lifespan shutdown) over
+ * the previous unconditional `child.kill()` — Windows' `ChildProcess.kill()`
+ * has no SIGTERM-equivalent grace period; it maps straight to
+ * `TerminateProcess`, so every prior quit killed the Python process
+ * mid-operation with no chance to close its own database connections,
+ * finish an in-flight write, or run any cleanup at all. Bounded by
+ * `GRACEFUL_SHUTDOWN_TIMEOUT_MS`: if the process hasn't actually exited by
+ * then (hung, or `/shutdown` itself never reached it), the original forced
+ * kill is still the fallback — this makes shutdown *more* reliable, never
+ * less.
+ */
+export async function stopBackend(): Promise<void> {
+  // Setting 'stopped' before the child actually exits is what makes the
+  // 'exit' handler above treat this as deliberate rather than a crash —
+  // it checks `state === 'stopped'` first and returns without touching
+  // the auto-restart counter.
   state = 'stopped';
   lastHealth = undefined;
-  if (child) {
-    child.kill();
-    child = null;
+  const proc = child;
+  if (!proc) return;
+
+  const exited = new Promise<void>((resolve) => {
+    proc.once('exit', () => resolve());
+  });
+
+  await requestGracefulShutdown();
+  const gracefulExit = await Promise.race([
+    exited.then(() => true),
+    new Promise<boolean>((resolve) =>
+      setTimeout(() => resolve(false), GRACEFUL_SHUTDOWN_TIMEOUT_MS),
+    ),
+  ]);
+
+  if (!gracefulExit && child === proc) {
+    proc.kill();
   }
+  child = null;
+}
+
+/**
+ * Sprint 15.6's Health Center "Restart Backend" action — a manual
+ * escape hatch for when automatic restart has exhausted its attempts
+ * (or the user just wants to force one), reusing the exact same
+ * stop/start functions the crash-recovery path already calls.
+ */
+export async function restartBackend(): Promise<void> {
+  if (!lastElectronDirname) return;
+  await stopBackend();
+  autoRestartAttempts = 0;
+  startBackend(lastElectronDirname);
 }
 
 export function getBackendHealth(): BackendHealth {

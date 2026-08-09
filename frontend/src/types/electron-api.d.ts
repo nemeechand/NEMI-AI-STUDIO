@@ -11,6 +11,27 @@ declare global {
     uptimeSeconds?: number;
   }
 
+  /** Sprint 15.6's Health Center backend aggregation. */
+  interface FullHealthResponse {
+    status: string;
+    version: string;
+    env: string;
+    uptime_seconds: number;
+    python: { version: string; implementation: string };
+    database: { ok: boolean; path: string; size_bytes: number | null; message: string | null };
+    providers: { total: number; connected: number; errors_total: number; requests_total: number };
+    ollama: { installed: boolean; server_running: boolean; host: string };
+    internet: { ok: boolean; message: string | null };
+  }
+
+  interface AppInfo {
+    appVersion: string;
+    electronVersion: string;
+    chromeVersion: string;
+    nodeVersion: string;
+    platform: string;
+  }
+
   type LogLevel = 'INFO' | 'WARNING' | 'ERROR' | 'DEBUG';
 
   interface LogEntry {
@@ -520,6 +541,9 @@ declare global {
       backend: {
         health: () => Promise<BackendHealth>;
         logs: (limit?: number) => Promise<LogEntry[]>;
+        getFullHealth: () => Promise<FullHealthResponse>;
+        getAppInfo: () => Promise<AppInfo>;
+        restart: () => Promise<void>;
       };
       fs: {
         selectProjectFolder: () => Promise<string | null>;

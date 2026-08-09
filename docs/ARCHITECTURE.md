@@ -1,8 +1,8 @@
 # ARCHITECTURE.md
 
-Version: 2.3
-Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8); Monaco Code Editor Locked (Sprint 9); AI Chat & Agent Framework Locked (Sprint 10); Agent Orchestration Framework Locked (Sprint 11); Workflow Engine & AI Project Manager Locked (Sprint 12); Live Development Dashboard & Intelligence Center Locked (Sprint 13); Knowledge Graph & AI Memory Engine Locked (Sprint 14); Autonomous Coding Engine Locked (Sprint 15); AI Provider Management Locked (Sprint 15.5)
-Governs: Sprint 15.5 onward
+Version: 2.4
+Status: Finalized (Sprint 3); Backend Integration Locked (Sprint 4); Filesystem Ownership Locked (Sprint 5); AI Chat/Editor Reserved (Sprint 6); Workspace & Project Management Locked (Sprint 7); Standalone Runtime Bundling Locked (Sprint 8); Monaco Code Editor Locked (Sprint 9); AI Chat & Agent Framework Locked (Sprint 10); Agent Orchestration Framework Locked (Sprint 11); Workflow Engine & AI Project Manager Locked (Sprint 12); Live Development Dashboard & Intelligence Center Locked (Sprint 13); Knowledge Graph & AI Memory Engine Locked (Sprint 14); Autonomous Coding Engine Locked (Sprint 15); AI Provider Management Locked (Sprint 15.5); Production Stabilization & Health Center Locked (Sprint 15.6)
+Governs: Sprint 15.6 onward
 
 ---
 
@@ -1720,6 +1720,173 @@ adding possibly-wrong rates); per-task-instance provider overrides
 
 ---
 
+# PRODUCTION STABILIZATION & HEALTH CENTER (locked decision — Sprint 15.6)
+
+A full architectural audit (backend, Electron, frontend, every existing
+monitoring/status surface) preceding any new code, per this sprint's own
+explicit mandate — "audit first, reuse second, extend third, create new
+only if absolutely necessary." The audit's own findings are recorded in
+`docs/SPRINT_15_6_REPORT.md`; this section documents what was locked in as
+a result.
+
+**Backend reliability.** `AIProvider`'s Gemini implementation
+(`app/ai/providers/gemini_provider.py`) and `GeminiEmbeddingProvider`
+(`app/ai/embeddings.py`) now close their `google-genai` `Client`'s
+internal `httpx.AsyncClient` (`await client.aio.aclose()`) in a `finally`
+on every path — the audit found this was the one provider integration
+that never did, a real, if bounded, connection leak on every Gemini call.
+`app/db/connection.py::get_connection()` now enables `PRAGMA
+journal_mode = WAL` and `PRAGMA busy_timeout = 5000` on every connection
+— see DATABASE_SCHEMA.md's CONVENTIONS for why. `app/server.py::_lifespan()`
+now retries database initialization up to 5 times (1s backoff) on
+`sqlite3.OperationalError` before failing loudly, rather than crashing the
+whole process on a transiently locked database at startup.
+
+**The agent-cycle race condition.** The audit found a genuine TOCTOU race:
+Electron's `runAgentCycleOnce()` (`frontend/electron/main.ts`) ran on an
+unguarded 4-second `setInterval`, and the backend's own task-claiming
+(`_run_task()` in `app/ai/orchestration/manager.py`) checked a task's
+status via a `SELECT` and only *then* issued an `UPDATE` — two overlapping
+cycles could both pass the `SELECT` check before either `UPDATE` landed,
+double-claiming the same task. Fixed on both ends: `AgentTasksRepository.
+mark_running()` is now an atomic `UPDATE ... WHERE status = 'queued'`
+returning whether the call actually won the claim (see DATABASE_SCHEMA.md),
+and `runAgentCycleOnce()` gained a reentrancy guard (`agentCycleInProgress`)
+so a slow-running batch can no longer overlap with the next tick at all —
+belt and suspenders, since either fix alone would have been sufficient.
+
+**Graceful shutdown.** `stopBackend()` (`frontend/electron/backend-process.ts`)
+previously called `child.kill()` unconditionally — on Windows this maps
+directly to `TerminateProcess`, an abrupt kill with no SIGTERM-equivalent
+grace period, so the Python backend's own FastAPI lifespan shutdown code
+(the `get_logger("shutdown").info(...)` line in `app/server.py`) had
+never actually run in practice on any prior quit. A new `POST /shutdown`
+endpoint (`app/api/health.py`) responds immediately, then delivers a real
+`signal.raise_signal(signal.SIGINT)` to the backend's own process shortly
+after (via `asyncio.create_task`, deliberately kept alive in a
+module-level set — a bare `create_task()` with no other reference is
+eligible for garbage collection mid-flight, which would silently drop the
+signal). uvicorn's own installed SIGINT handler turns this into an
+orderly shutdown, running the lifespan's shutdown code for the first time
+— confirmed live via the real `NEMI backend shutting down` log line
+appearing. `stopBackend()` now awaits this graceful path with a bounded
+`GRACEFUL_SHUTDOWN_TIMEOUT_MS` (3s) timeout before falling back to the
+original forced `kill()` — shutdown is strictly more reliable than
+before, never less, since the fallback still exists.
+
+**Automatic backend crash recovery.** Previously, any mid-session backend
+crash (not the initial-startup-timeout case `watchForLateRecovery()`
+already handled) latched the app into `state: 'error'` for the rest of
+the session — the only recovery was fully quitting and relaunching
+Electron; the audit confirmed no automatic or even manual restart path
+existed at all. `backend-process.ts`'s `'exit'` handler now attempts up to
+`MAX_AUTO_RESTART_ATTEMPTS` (3) automatic restarts with a fixed backoff
+(`AUTO_RESTART_BACKOFF_MS`, 2s) when the crash happened while the backend
+was `'ready'` or `'starting'` (never for a deliberate `stopBackend()` —
+gated on `state === 'stopped'`, checked first). A successful recovery
+resets the attempt counter, so a later, unrelated crash gets its own full
+budget rather than inheriting an exhausted one. A new `restartBackend()`
+function (stop, then start again) backs a manual "Restart Backend" button
+in the Health Center as a user-triggered fallback once automatic attempts
+are exhausted, or just on demand.
+
+**Single-instance enforcement.** The audit found `app.requestSingleInstanceLock()`
+was never called anywhere — launching the app twice silently produced a
+second, fully-interactive but backend-less window (the second backend
+failed to bind the already-held port 8756). `main.ts` now acquires the
+lock at module load, quitting immediately if a first instance already
+holds it; `app.on('second-instance', ...)` focuses the existing window
+instead. Verified live: a second `_electron.launch()` against the same
+user-data directory fails to open a window at all while the first
+instance stays fully alive and responsive throughout.
+
+**The Health Center — one unified panel, reusing every existing real data
+source.** A dedicated pre-implementation audit (recorded in full in
+`docs/SPRINT_15_6_REPORT.md`) inventoried every existing health/status
+surface first: `StatusBar.tsx` (backend health), the Sprint 13
+Intelligence Center's Resources/Terminal/Build Center sections
+(`systemMetrics`/`gitStatus`/`availableRunners`/`runners`, all already
+polled by `IntelligenceProvider.tsx`), and Sprint 15.5's Provider
+Dashboard/Ollama status. Rather than add a fourth place polling backend
+health, or a third place polling system resources, `HealthCenterSection.tsx`
+(a new, 13th section in the existing Intelligence Center — not a rival
+top-level dashboard) reuses `useIntelligence()`'s already-fetched
+`systemMetrics`/`gitStatus`/`availableRunners`/`runners` directly, and
+adds exactly one genuinely new data source: `GET /health/full`
+(`app/api/health.py`) — a real backend-side aggregation of backend
+status, a real database connectivity check (`SELECT 1`), the real Python
+runtime version, a real AI-provider connected/error summary (reusing
+`ProviderSettingsRepository`/`StatsRepository.provider_dashboard()` — the
+exact same repositories `/providers/dashboard` already calls, not a
+second counting implementation), real Ollama install/server-reachability
+detection (reusing `is_ollama_installed()`/`is_server_running()` from
+`app/ai/providers/ollama_provider.py`), and a real (cheap, short-timeout)
+internet-connectivity check. Git/workspace/build/CPU/memory/disk are
+genuinely Electron/renderer-owned concepts the backend has no notion of
+("the currently open project," the host's own resource usage) and are
+combined client-side rather than duplicated server-side. An "Overall
+Health" score is computed client-side from all thirteen checks — never a
+fabricated single number, always a real derived tally of real per-check
+states (`ok`/`warning`/`critical`/`unknown`).
+
+**Duplicate-monitoring cleanup found by the same audit.** `SprintProgressCenter.tsx`
+(the Agents panel's own progress widget) was independently re-polling
+both `window.nemi.system.getResourceUsage()` (already polled by
+`ResourceMonitorSection.tsx`) and `window.nemi.backend.logs()` (already
+polled by `LoggerPanel.tsx` and `TerminalSection.tsx`) — the single
+biggest concrete duplication the audit found. Both blocks were removed in
+favor of a short pointer to the Live Dashboard's Health Center/Resources/
+Terminal sections, which now serve as the canonical source for that data.
+A smaller, static duplicate — the Dashboard's `SprintStatusCard.tsx`,
+showing a hand-maintained `SPRINT_HISTORY` array frozen at "Sprint 3"
+while the project was 15+ sprints further along (a real, visible
+trust/accuracy issue, not merely stale in principle) — was replaced by
+`SystemHealthCard.tsx`, a compact, real, live summary reusing the exact
+same `GET /health/full` call the Health Center itself uses.
+
+**Version consistency.** The audit found four different version strings
+across the app, three of them already disagreeing:
+`frontend/package.json` (`0.1.0-alpha.1`, the real source of truth —
+also what electron-builder stamps into installer/portable filenames),
+`backend/app/__version__` (was `0.1.0`, missing the `-alpha.1` suffix,
+now fixed to match), the About tab (was a hardcoded literal, also
+missing the suffix), and `docs/PROJECT_MEMORY.md`'s "Project Version"
+field (was a third, further-truncated string). `app.getVersion()` was
+found, live, to be unreliable for this in dev mode — Electron falls back
+to its *own* version (e.g. `32.3.3`) rather than reading
+`package.json`'s `version` field unless the app is actually packaged,
+since there is no public `app.setVersion()` API to correct this. Fixed by
+reading `package.json` directly (`resolveAppVersion()` in `main.ts`,
+packaged-vs-dev-aware) and exposing it via a new `app:get-info` IPC
+channel (`window.nemi.backend.getAppInfo()` — added to the existing
+`backend` namespace, not a new one) alongside `electronVersion`/
+`chromeVersion`/`nodeVersion`/`platform` from `process.versions`. Both
+the About tab and StatusBar (which also dropped a hardcoded, stale
+"Sprint 6 — Stabilization" label found by the same audit) now read this
+real value instead of a hand-maintained string.
+
+**IPC surface: no new namespace.** `backend:get-full-health`,
+`backend:restart`, and `app:get-info` were all added to the existing
+`backend` namespace (`window.nemi.backend`) — a genuine extension of an
+existing concern (backend/app lifecycle and status), matching Sprint
+15's own precedent of extending `agents`/`workflows` rather than adding
+a namespace for every new capability. The IPC surface remains at
+thirteen namespaces, unchanged in count since Sprint 15.5.
+
+**Explicitly out of scope**, stated up front: a synthetic 10,000+ file
+load test (verified instead at this repo's own real scale, ~2,000+
+files, matching every prior sprint's honesty-boundary practice of testing
+against real data rather than a fabricated benchmark); unifying the two
+remaining minor duplicate ETA-calculation implementations
+(`SprintCenterSection.tsx` and `SprintProgressCenter.tsx`) — low
+real-world impact, deferred to avoid destabilizing two already-correct
+panels under this sprint's time budget (see `docs/KNOWN_ISSUES.md`);
+code-signing (a real external dependency — an acquired certificate —
+outside this sprint's control); a CI pipeline automating the offline
+verification suite (still run manually, per `docs/RELEASE_CHECKLIST.md`).
+
+---
+
 # PLUGIN / EXTENSION ARCHITECTURE (future — not started)
 
 MASTER_SPECIFICATION.md lists "Plugin Marketplace" under FUTURE
@@ -2066,6 +2233,36 @@ must never run with Node.js integration in the renderer.
 72. **(Sprint 15.5)** Provider Switching is per agent-role (one mapping
     in Settings), not per task instance — keeps the UI to a simple
     five-row table rather than per-run overrides.
+73. **(Sprint 15.6)** Backend shutdown is graceful-then-forced, never
+    forced-only: `POST /shutdown` delivers a real self-directed SIGINT
+    (via `signal.raise_signal`, not OS-level process signaling) and
+    `stopBackend()` awaits it with a bounded timeout before falling
+    back to the original forced kill — strictly more reliable than the
+    prior always-forced approach, never less.
+74. **(Sprint 15.6)** Automatic backend restart is bounded (3 attempts,
+    fixed 2s backoff) and only triggers for a crash while `'ready'` or
+    `'starting'` — never for a deliberate `stopBackend()` call (gated on
+    `state === 'stopped'`, checked first) and never unboundedly, so a
+    persistently crash-looping backend still surfaces as a clear error
+    rather than restarting forever.
+75. **(Sprint 15.6)** The Health Center is a 13th Intelligence Center
+    section, not a new top-level dashboard — reuses
+    `systemMetrics`/`gitStatus`/`availableRunners`/`runners` from the
+    existing `IntelligenceProvider` and adds exactly one new data
+    source (`GET /health/full`) for what genuinely didn't exist
+    anywhere yet, per this sprint's own "audit first, reuse second"
+    mandate.
+76. **(Sprint 15.6)** `GET /health/full` owns only backend-side signals
+    (backend/database/Python/AI providers/Ollama/internet) — git,
+    workspace, build, and system resource metrics stay Electron/
+    renderer-owned and are combined client-side, since the backend has
+    no notion of "the currently open project" or the host's own
+    CPU/memory/disk.
+77. **(Sprint 15.6)** `app.getVersion()` is not used for the app's
+    displayed version — confirmed live to fall back to Electron's own
+    version in dev mode, since there is no public `app.setVersion()` to
+    correct it. `package.json` is read directly instead
+    (`resolveAppVersion()`), packaged-vs-dev-aware.
 
 ---
 

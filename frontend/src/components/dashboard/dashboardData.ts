@@ -1,44 +1,19 @@
 /**
  * Static project facts surfaced on the Dashboard.
- * Source of truth is docs/PROJECT_MEMORY.md — keep this file in sync
- * with it whenever a sprint completes.
+ * Source of truth is docs/PROJECT_MEMORY.md.
+ *
+ * Sprint 15.6: the sprint-by-sprint progress list previously here
+ * (`SPRINT_HISTORY`) was a hand-maintained snapshot that had gone
+ * stale — a production-stabilization audit found it still stopped at
+ * "Sprint 3" while the project was actually 15+ sprints further along,
+ * misleading every user who opened the Dashboard. Rather than keep a
+ * second, easily-forgotten copy of sprint status in sync by hand, that
+ * widget was replaced with SystemHealthCard.tsx, a real, live summary
+ * reusing the same `GET /health/full` data source as the Live
+ * Dashboard's Health Center section — team/tech-stack facts below
+ * don't have this staleness problem (they don't change every sprint),
+ * so they're unaffected.
  */
-
-export type SprintStatus = 'completed' | 'current' | 'pending';
-
-export interface SprintSummary {
-  id: string;
-  name: string;
-  status: SprintStatus;
-  summary: string;
-}
-
-export const SPRINT_HISTORY: SprintSummary[] = [
-  {
-    id: 'sprint-1',
-    name: 'Sprint 1',
-    status: 'completed',
-    summary: 'Electron + React + TypeScript + Vite bootstrap',
-  },
-  {
-    id: 'sprint-1b',
-    name: 'Sprint 1B',
-    status: 'completed',
-    summary: 'Python backend foundation (Ruff, Mypy, pytest)',
-  },
-  {
-    id: 'sprint-2',
-    name: 'Sprint 2',
-    status: 'completed',
-    summary: 'Desktop application shell (VS Code style layout, theme manager)',
-  },
-  {
-    id: 'sprint-3',
-    name: 'Sprint 3',
-    status: 'current',
-    summary: 'Architecture, database, and agent finalization + Dashboard',
-  },
-];
 
 export interface TeamMember {
   role: string;

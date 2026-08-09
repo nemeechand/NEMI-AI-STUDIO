@@ -20,6 +20,26 @@ export interface HealthResponse {
   uptime_seconds: number;
 }
 
+/** Sprint 15.6's Health Center backend aggregation (`GET /health/full`) —
+ * every real, backend-owned health signal in one response. See
+ * backend/app/api/health.py::health_full() for what backs each field. */
+export interface FullHealthResponse {
+  status: string;
+  version: string;
+  env: string;
+  uptime_seconds: number;
+  python: { version: string; implementation: string };
+  database: { ok: boolean; path: string; size_bytes: number | null; message: string | null };
+  providers: {
+    total: number;
+    connected: number;
+    errors_total: number;
+    requests_total: number;
+  };
+  ollama: { installed: boolean; server_running: boolean; host: string };
+  internet: { ok: boolean; message: string | null };
+}
+
 export interface ProjectRecord {
   id: string;
   name: string;
@@ -36,6 +56,34 @@ function baseUrl(): string {
 
 export function checkHealth(): Promise<Response> {
   return fetch(`${baseUrl()}/health`, { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) });
+}
+
+/** Sprint 15.6: requests a real graceful shutdown (`POST /shutdown`) —
+ * see backend-process.ts::stopBackend() for why this replaced an
+ * unconditional forced kill. Never throws: the caller treats "the
+ * request itself failed" the same as "no response in time," both
+ * meaning graceful shutdown isn't available right now and a forced
+ * kill is the only option left. */
+export async function requestGracefulShutdown(): Promise<boolean> {
+  try {
+    const response = await fetch(`${baseUrl()}/shutdown`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function fetchFullHealth(): Promise<FullHealthResponse> {
+  const response = await fetch(`${baseUrl()}/health/full`, {
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`Backend returned ${response.status} for /health/full`);
+  }
+  return (await response.json()) as FullHealthResponse;
 }
 
 export async function fetchRecentLogs(limit = 50): Promise<LogEntry[]> {

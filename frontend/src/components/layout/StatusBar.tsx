@@ -35,6 +35,16 @@ export function StatusBar() {
   const { theme } = useTheme();
   const [backendStatus, setBackendStatus] = useState<BackendStatus>('checking');
   const [backendDetail, setBackendDetail] = useState<string | undefined>(undefined);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Sprint 15.6: replaces a hardcoded "Sprint 6 — Stabilization" label
+    // (stale since Sprint 6, found during a production-stabilization
+    // audit) with the app's real running version — the same value
+    // AboutTab.tsx now reads, both sourced from Electron's own
+    // `app.getVersion()` rather than a second hand-maintained string.
+    void window.nemi.backend.getAppInfo().then((info) => setAppVersion(info.appVersion));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -66,7 +76,7 @@ export function StatusBar() {
     <footer className="flex h-6 shrink-0 items-center justify-between border-t border-border bg-accent px-3 text-xs text-accent-fg">
       <div className="flex items-center gap-3">
         <span>NEMI AI STUDIO</span>
-        <span>Sprint 6 — Stabilization</span>
+        {appVersion && <span>v{appVersion}</span>}
       </div>
       <div className="flex items-center gap-3">
         <span className="capitalize">{theme} theme</span>

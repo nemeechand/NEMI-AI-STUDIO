@@ -41,9 +41,6 @@ class ProjectOut(BaseModel):
 
 # --- AI Layer (Sprint 10) ---
 
-AiRole = Literal["user", "assistant", "system"]
-AiMessageStatus = Literal["complete", "cancelled", "error"]
-
 
 class AiProviderOut(BaseModel):
     id: str
@@ -61,40 +58,6 @@ class AiConversationCreate(BaseModel):
 
 class AiConversationRename(BaseModel):
     title: str = Field(min_length=1, max_length=200)
-
-
-class AiConversationOut(BaseModel):
-    id: str
-    project_id: str | None
-    title: str
-    provider: str
-    model: str
-    agent_id: str | None = None
-    task_id: str | None = None
-    created_at: str
-    updated_at: str
-
-
-class AiContextRefOut(BaseModel):
-    path: str
-    start_line: int | None = None
-    end_line: int | None = None
-
-
-class AiMessageOut(BaseModel):
-    id: str
-    conversation_id: str
-    role: AiRole
-    content: str
-    provider: str | None
-    model: str | None
-    status: AiMessageStatus
-    error_message: str | None
-    prompt_tokens: int | None
-    completion_tokens: int | None
-    context_refs: list[AiContextRefOut] | None
-    latency_ms: int | None = None
-    created_at: str
 
 
 class AiContextRefIn(BaseModel):

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { X } from 'lucide-react';
 import { IconButton } from '../common/IconButton';
 import { SECTIONS, type SectionId } from './sections';
+import { HealthCenterSection } from './HealthCenterSection';
 import { SprintCenterSection } from './SprintCenterSection';
 import { AgentMonitorSection } from './AgentMonitorSection';
 import { WorkflowViewSection } from './WorkflowViewSection';
@@ -54,6 +55,7 @@ export function IntelligenceCenter({ onClose }: IntelligenceCenterProps) {
           })}
         </nav>
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4">
+          {activeSection === 'health' && <HealthCenterSection />}
           {activeSection === 'sprint' && <SprintCenterSection />}
           {activeSection === 'agents' && <AgentMonitorSection />}
           {activeSection === 'workflow' && <WorkflowViewSection />}

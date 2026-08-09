@@ -11,10 +11,6 @@ import {
   WORKFLOW_STATUS_LABELS,
 } from './roleMeta';
 
-const LOG_POLL_INTERVAL_MS = 5000;
-const RESOURCE_POLL_INTERVAL_MS = 5000;
-const LOG_LIMIT = 30;
-
 const RISK_LABEL: Record<RiskLevel, string> = {
   low: 'Low risk',
   medium: 'Medium risk',
@@ -59,8 +55,6 @@ interface SprintProgressCenterProps {
 export function SprintProgressCenter({ workflow }: SprintProgressCenterProps) {
   const { pauseWorkflow, resumeWorkflow, cancelWorkflow, approveTask } = useWorkflows();
   const { openConversation } = useAi();
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [resourceUsage, setResourceUsage] = useState<ResourceUsage | null>(null);
   const [summary, setSummary] = useState<FeatureSummary | null>(null);
   const [documentationOpen, setDocumentationOpen] = useState(false);
 
@@ -74,34 +68,6 @@ export function SprintProgressCenter({ workflow }: SprintProgressCenterProps) {
       .then(setSummary)
       .catch(() => setSummary(null));
   }, [workflow.id, workflow.tasks.length]);
-
-  useEffect(() => {
-    // The backend's Python `logging` module output (which is where the
-    // orchestrator's own log lines go — see docs/ARCHITECTURE.md's Sprint 4
-    // decision that centralized logging is console/file, separate from
-    // this structured `logs` table) is forwarded here only via the
-    // backend.stdout/backend.stderr rows the Logger Panel already reads.
-    // Individual log lines aren't tagged with a workflow id, so this is
-    // honestly "recent backend activity", not activity scoped to this one
-    // workflow exclusively.
-    async function fetchLogs() {
-      const result = await window.nemi.backend.logs(LOG_LIMIT).catch(() => []);
-      setLogs(result.filter((entry) => entry.source.startsWith('backend.')));
-    }
-    void fetchLogs();
-    const interval = setInterval(() => void fetchLogs(), LOG_POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [workflow.id]);
-
-  useEffect(() => {
-    async function fetchUsage() {
-      const usage = await window.nemi.system.getResourceUsage().catch(() => null);
-      setResourceUsage(usage);
-    }
-    void fetchUsage();
-    const interval = setInterval(() => void fetchUsage(), RESOURCE_POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, []);
 
   const counters = useMemo(() => {
     const base = { queued: 0, running: 0, completed: 0, failed: 0, cancelled: 0 };
@@ -170,17 +136,6 @@ export function SprintProgressCenter({ workflow }: SprintProgressCenterProps) {
         <p>
           ETA: <span className="text-fg">{eta ?? 'Calculating…'}</span>
         </p>
-        {resourceUsage && (
-          <p>
-            Backend resource usage:{' '}
-            <span className="text-fg">
-              {resourceUsage.memoryMb.toFixed(0)} MB
-              {resourceUsage.cpuPercent !== null
-                ? ` · ${resourceUsage.cpuPercent.toFixed(0)}% CPU`
-                : ''}
-            </span>
-          </p>
-        )}
         {workflow.error_message && <p className="text-danger">{workflow.error_message}</p>}
       </div>
 
@@ -316,18 +271,10 @@ export function SprintProgressCenter({ workflow }: SprintProgressCenterProps) {
           </div>
         )}
 
-      {logs.length > 0 && (
-        <div>
-          <p className="mb-1 font-medium text-fg">Recent backend activity</p>
-          <div className="max-h-32 space-y-0.5 overflow-y-auto rounded border border-border bg-surface px-1.5 py-1 font-mono text-[10px] text-fg-muted">
-            {logs.map((entry) => (
-              <div key={entry.id} className="truncate">
-                {entry.message}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <p className="text-[10px] text-fg-muted">
+        Resource usage and backend logs live in the Live Dashboard (Ctrl+Shift+I) — Health Center,
+        Resources, and Terminal sections.
+      </p>
     </div>
   );
 }

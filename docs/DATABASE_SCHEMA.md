@@ -1,7 +1,7 @@
 # DATABASE_SCHEMA.md
 
-Version: 1.9
-Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4); `projects` Repository Implemented (Sprint 7); `ai_conversations`/`ai_messages` Added and Implemented (Sprint 10); `agent_tasks` Added and `memory` Repository Implemented (Sprint 11); `workflows`/`milestones` Added and `agent_tasks` Extended (Sprint 12); `history` Repository Implemented and `agent_tasks.live_output` Added (Sprint 13); `graph_nodes`/`graph_edges`/`embeddings` Added, `files` Repository Implemented, `memory`'s Remaining Types Implemented (Sprint 14); `file_snapshots` Added, `agent_tasks`/`workflows` Extended for the Autonomous Coding Engine (Sprint 15); `provider_settings`/`model_favorites`/`agent_provider_defaults` Added, `ai_messages.latency_ms` Added for AI Provider Management (Sprint 15.5)
+Version: 1.9.1
+Status: Finalized Design (Sprint 3); Schema Implemented (Sprint 4); `projects` Repository Implemented (Sprint 7); `ai_conversations`/`ai_messages` Added and Implemented (Sprint 10); `agent_tasks` Added and `memory` Repository Implemented (Sprint 11); `workflows`/`milestones` Added and `agent_tasks` Extended (Sprint 12); `history` Repository Implemented and `agent_tasks.live_output` Added (Sprint 13); `graph_nodes`/`graph_edges`/`embeddings` Added, `files` Repository Implemented, `memory`'s Remaining Types Implemented (Sprint 14); `file_snapshots` Added, `agent_tasks`/`workflows` Extended for the Autonomous Coding Engine (Sprint 15); `provider_settings`/`model_favorites`/`agent_provider_defaults` Added, `ai_messages.latency_ms` Added for AI Provider Management (Sprint 15.5); Connection Reliability Hardened and Dead Repository Methods Removed for Production Stabilization (Sprint 15.6 — no table/column changes)
 Engine: SQLite
 
 ---
@@ -31,6 +31,16 @@ document only, produced by the Architect role.
   foreign key and an index on it.
 - No column stores secrets. API keys/tokens live in OS-level secure
   storage or environment variables, never in SQLite (Security Rules).
+- **(Sprint 15.6)** Every connection also sets `PRAGMA journal_mode =
+  WAL` and `PRAGMA busy_timeout = 5000` (`app/db/connection.py`) — a
+  production-stabilization audit found the previous defaults (rollback
+  journal, no busy timeout) would surface as an immediate, uncaught
+  `database is locked` error under the brief connection overlaps this
+  app's one-connection-per-call model can produce (e.g. the 4-second
+  agent-cycle poll landing mid-write). WAL lets reads proceed
+  concurrently with a writer; the busy timeout gives a genuinely
+  concurrent write up to 5 real seconds to complete instead of failing
+  instantly.
 
 ---
 
@@ -536,18 +546,46 @@ agent_provider_defaults  (standalone, keyed by agent_role — provider is a
 
 ---
 
-# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7, Sprint 10, Sprint 11, Sprint 12, Sprint 13, Sprint 14, Sprint 15, Sprint 15.5)
+# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7, Sprint 10, Sprint 11, Sprint 12, Sprint 13, Sprint 14, Sprint 15, Sprint 15.5, Sprint 15.6)
 
 - Schema implemented exactly as designed above:
   `backend/app/db/schema.py::SCHEMA_STATEMENTS` /  `init_db()`.
 - `init_db()` runs automatically on backend startup
   (`backend/app/server.py`), creating `database/nemi.db` if it
   doesn't exist. The statements are idempotent (`CREATE TABLE IF NOT
-  EXISTS`), so repeated startups are safe.
+  EXISTS`), so repeated startups are safe. **(Sprint 15.6)** startup now
+  retries up to 5 times with a 1s backoff on `sqlite3.OperationalError`
+  before failing loudly, so a transiently locked database (another
+  process still closing) doesn't crash the whole backend on its first
+  request.
 - Connection management: `backend/app/db/connection.py::get_connection`
   — a context manager enabling `PRAGMA foreign_keys = ON` and
   `sqlite3.Row` access, one connection per use rather than a shared
-  pool (appropriate for a single-user desktop app).
+  pool (appropriate for a single-user desktop app). **(Sprint 15.6)**
+  also enables WAL mode and a 5-second busy timeout — see CONVENTIONS
+  above.
+- **(Sprint 15.6)** A production-stabilization audit found and removed
+  five genuinely dead repository methods with zero call sites anywhere
+  in `app/` or `tests/`: `AgentsRepository.get_by_id()`,
+  `AgentsRepository`-module's standalone `get_system_prompt()`,
+  `FilesRepository.get_by_path()`, and
+  `WorkflowsRepository.set_conversation_id()` — plus two unused API
+  response schemas (`AiConversationOut`, `AiMessageOut`, and their
+  now-orphaned `AiContextRefOut`/`AiRole`/`AiMessageStatus` supporting
+  types) in `backend/app/api/schemas.py`. No table or column was
+  touched; `workflows.conversation_id` remains schema-ready and
+  reserved (see its table section above) even though its one setter
+  method was removed — the column itself may still gain a real writer
+  in a future sprint.
+- **(Sprint 15.6)** `AgentTasksRepository.mark_running()` changed from
+  an unconditional `UPDATE` to an atomic `UPDATE ... WHERE status =
+  'queued'`, returning whether *this* call actually claimed the task.
+  A production-stabilization audit found the previous version was a
+  real TOCTOU race: two overlapping agent-cycle scheduler passes (the
+  Electron-side poll had no reentrancy guard until this same sprint's
+  fix) could both pass a prior `SELECT`-based "is this still queued"
+  check before either `UPDATE` ran, double-claiming the same task. See
+  `docs/SPRINT_15_6_REPORT.md`.
 - Repository pattern: `LogsRepository`
   (`backend/app/db/repositories/logs_repository.py`), Sprint 7's
   `ProjectsRepository` (`record_opened()` upserts by `path`,

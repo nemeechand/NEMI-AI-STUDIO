@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { BackendHealth, ResourceUsage } from './backend-process';
-import type { LogEntry, ProjectRecord } from './backend-client';
+import type { FullHealthResponse, LogEntry, ProjectRecord } from './backend-client';
 import type { ExplorerEntry, SearchMatch, SearchOptions } from './filesystem';
 import type { ProviderId } from './ai-credentials';
 import type {
@@ -47,9 +47,20 @@ import type {
   ProviderSettings,
 } from './providers-client';
 
+interface AppInfo {
+  appVersion: string;
+  electronVersion: string;
+  chromeVersion: string;
+  nodeVersion: string;
+  platform: string;
+}
+
 const backend = {
   health: (): Promise<BackendHealth> => ipcRenderer.invoke('backend:health'),
   logs: (limit?: number): Promise<LogEntry[]> => ipcRenderer.invoke('backend:logs', limit),
+  getFullHealth: (): Promise<FullHealthResponse> => ipcRenderer.invoke('backend:get-full-health'),
+  getAppInfo: (): Promise<AppInfo> => ipcRenderer.invoke('app:get-info'),
+  restart: (): Promise<void> => ipcRenderer.invoke('backend:restart'),
 };
 
 const fsApi = {

@@ -198,14 +198,22 @@ class AgentTasksRepository:
             self._connection.commit()
         return ids
 
-    def mark_running(self, task_id: str) -> None:
+    def mark_running(self, task_id: str) -> bool:
+        """Claims a queued task atomically — the `WHERE status = 'queued'`
+        guard is the actual race-prevention: two overlapping scheduler
+        cycles (Sprint 15.6 found the agent-cycle poll has no reentrancy
+        guard) can both pass a prior `SELECT`-based check on the same
+        task, but only one `UPDATE` can win the row here. Returns whether
+        *this* call actually claimed it — the caller must not proceed to
+        execute the task otherwise."""
         now = datetime.now(UTC).isoformat()
-        self._connection.execute(
+        cursor = self._connection.execute(
             "UPDATE agent_tasks SET status = 'running', started_at = ?, updated_at = ? "
-            "WHERE id = ?",
+            "WHERE id = ? AND status = 'queued'",
             (now, now, task_id),
         )
         self._connection.commit()
+        return cursor.rowcount > 0
 
     def update_live_output(self, task_id: str, content: str) -> None:
         """Sprint 13: periodically flushed (not per-chunk) accumulated

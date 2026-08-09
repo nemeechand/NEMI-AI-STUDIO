@@ -49,13 +49,6 @@ class FilesRepository:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def get_by_path(self, project_id: str, relative_path: str) -> dict[str, Any] | None:
-        row = self._connection.execute(
-            "SELECT * FROM files WHERE project_id = ? AND relative_path = ?",
-            (project_id, relative_path),
-        ).fetchone()
-        return dict(row) if row else None
-
     def delete_missing(self, project_id: str, known_paths: set[str]) -> int:
         """Removes rows for files no longer present on disk as of the most
         recent index run — keeps a stale/renamed/deleted file from lingering

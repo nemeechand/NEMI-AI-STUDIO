@@ -103,6 +103,11 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
             raise InvalidRequestError(f"Gemini rejected the request: {exc}") from exc
         except genai_errors.ServerError as exc:
             raise ProviderNetworkError(f"Gemini server error: {exc}") from exc
+        finally:
+            # See app/ai/providers/gemini_provider.py's identical note: the
+            # google-genai Client's httpx.AsyncClient is only released via
+            # this explicit call, never by garbage collection.
+            await client.aio.aclose()
 
 
 class OllamaEmbeddingProvider(EmbeddingProvider):

@@ -86,6 +86,12 @@ class GeminiProvider(AIProvider):
             raise InvalidRequestError(f"Gemini rejected the request: {exc}") from exc
         except genai_errors.ServerError as exc:
             raise ProviderNetworkError(f"Gemini server error: {exc}") from exc
+        finally:
+            # google-genai's Client lazily owns an httpx.AsyncClient that is
+            # only released via this explicit call — never closed by garbage
+            # collection, so every code path (including exceptions) must
+            # reach here or the connection leaks.
+            await client.aio.aclose()
 
     async def test_connection(
         self, *, api_key: str | None, base_url: str | None = None
@@ -105,6 +111,8 @@ class GeminiProvider(AIProvider):
             return ConnectionTestResult(ok=False, message=f"Connection test failed: {exc}")
         except Exception as exc:  # a connection test must never raise
             return ConnectionTestResult(ok=False, message=f"Connection test failed: {exc}")
+        finally:
+            await client.aio.aclose()
 
     async def list_models(
         self, *, api_key: str | None, base_url: str | None = None
@@ -116,3 +124,5 @@ class GeminiProvider(AIProvider):
             return sorted([m.name async for m in await client.aio.models.list() if m.name])
         except Exception:
             return []
+        finally:
+            await client.aio.aclose()

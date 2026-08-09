@@ -29,6 +29,7 @@ export function AppShell() {
   const [sidebarPanel, setSidebarPanel] = useState<SidebarPanel>('explorer');
   const [loggerVisible, setLoggerVisible] = useState(true);
   const [aiChatVisible, setAiChatVisible] = useState(true);
+  const [chatFullPage, setChatFullPage] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [newAgentTaskOpen, setNewAgentTaskOpen] = useState(false);
@@ -47,6 +48,14 @@ export function AppShell() {
   // panel happens to be open — this makes sure it actually becomes visible
   // when they do, rather than silently updating a hidden panel's state.
   useEffect(() => onRequestOpenPanel(() => setAiChatVisible(true)), [onRequestOpenPanel]);
+
+  // Full Page Chat only makes sense while the chat panel itself is visible
+  // — if it's toggled off (e.g. Ctrl+Shift+A) while full page, drop back to
+  // the normal layout instead of leaving stale full-page state around for
+  // the next time chat reopens.
+  useEffect(() => {
+    if (!aiChatVisible) setChatFullPage(false);
+  }, [aiChatVisible]);
 
   const hasOpenTabs = groups.some((g) => g.tabs.length > 0);
 
@@ -185,38 +194,44 @@ export function AppShell() {
               onNewWorkflow={() => setNewWorkflowOpen(true)}
             />
           ))}
-        <div className="flex min-w-0 flex-1 flex-col">
-          <main className="flex min-h-0 flex-1 overflow-auto">
-            {intelligenceCenterVisible ? (
-              <IntelligenceCenter onClose={() => setIntelligenceCenterVisible(false)} />
-            ) : hasOpenTabs ? (
-              <div
-                className={`flex min-h-0 min-w-0 flex-1 ${
-                  splitDirection === 'horizontal' ? 'flex-col' : 'flex-row'
-                }`}
-              >
-                <MonacoEditorPane groupId="primary" />
-                {splitDirection && (
-                  <div
-                    className={
-                      splitDirection === 'horizontal'
-                        ? 'h-px shrink-0 bg-border'
-                        : 'w-px shrink-0 bg-border'
-                    }
-                  />
-                )}
-                {splitDirection && <MonacoEditorPane groupId="secondary" />}
-              </div>
-            ) : (
-              <Dashboard
-                onOpenSettings={() => setSettingsOpen(true)}
-                onNewProject={() => setNewProjectOpen(true)}
-              />
-            )}
-          </main>
-          {loggerVisible && <LoggerPanel onClose={() => setLoggerVisible(false)} />}
-        </div>
-        {aiChatVisible && <ChatPanel />}
+        {chatFullPage && aiChatVisible ? (
+          <ChatPanel fullPage onToggleFullPage={() => setChatFullPage(false)} />
+        ) : (
+          <div className="flex min-w-0 flex-1 flex-col">
+            <main className="flex min-h-0 flex-1 overflow-auto">
+              {intelligenceCenterVisible ? (
+                <IntelligenceCenter onClose={() => setIntelligenceCenterVisible(false)} />
+              ) : hasOpenTabs ? (
+                <div
+                  className={`flex min-h-0 min-w-0 flex-1 ${
+                    splitDirection === 'horizontal' ? 'flex-col' : 'flex-row'
+                  }`}
+                >
+                  <MonacoEditorPane groupId="primary" />
+                  {splitDirection && (
+                    <div
+                      className={
+                        splitDirection === 'horizontal'
+                          ? 'h-px shrink-0 bg-border'
+                          : 'w-px shrink-0 bg-border'
+                      }
+                    />
+                  )}
+                  {splitDirection && <MonacoEditorPane groupId="secondary" />}
+                </div>
+              ) : (
+                <Dashboard
+                  onOpenSettings={() => setSettingsOpen(true)}
+                  onNewProject={() => setNewProjectOpen(true)}
+                />
+              )}
+            </main>
+            {loggerVisible && <LoggerPanel onClose={() => setLoggerVisible(false)} />}
+          </div>
+        )}
+        {!chatFullPage && aiChatVisible && (
+          <ChatPanel onToggleFullPage={() => setChatFullPage(true)} />
+        )}
       </div>
       <StatusBar />
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}

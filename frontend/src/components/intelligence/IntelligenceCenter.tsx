@@ -5,6 +5,7 @@ import { SECTIONS, type SectionId } from './sections';
 import { HealthCenterSection } from './HealthCenterSection';
 import { SprintCenterSection } from './SprintCenterSection';
 import { AgentMonitorSection } from './AgentMonitorSection';
+import { AiCodingControlSection } from './AiCodingControlSection';
 import { WorkflowViewSection } from './WorkflowViewSection';
 import { TerminalSection } from './TerminalSection';
 import { AiThinkingSection } from './AiThinkingSection';
@@ -58,6 +59,7 @@ export function IntelligenceCenter({ onClose }: IntelligenceCenterProps) {
           {activeSection === 'health' && <HealthCenterSection />}
           {activeSection === 'sprint' && <SprintCenterSection />}
           {activeSection === 'agents' && <AgentMonitorSection />}
+          {activeSection === 'coding-control' && <AiCodingControlSection />}
           {activeSection === 'workflow' && <WorkflowViewSection />}
           {activeSection === 'terminal' && <TerminalSection />}
           {activeSection === 'thinking' && <AiThinkingSection />}

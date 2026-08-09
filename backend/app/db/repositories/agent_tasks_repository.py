@@ -35,6 +35,8 @@ class AgentTasksRepository:
         workflow_id: str | None = None,
         milestone_id: str | None = None,
         requires_approval: bool = False,
+        execution_backend: str = "api",
+        cli_tool_id: str | None = None,
     ) -> dict[str, Any]:
         task_id = str(uuid4())
         now = datetime.now(UTC).isoformat()
@@ -43,8 +45,9 @@ class AgentTasksRepository:
             INSERT INTO agent_tasks
                 (id, project_id, title, description, agent_role, status, priority,
                  depends_on_task_id, provider, model, retry_count, max_retries,
-                 workflow_id, milestone_id, requires_approval, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+                 workflow_id, milestone_id, requires_approval, execution_backend,
+                 cli_tool_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -60,6 +63,8 @@ class AgentTasksRepository:
                 workflow_id,
                 milestone_id,
                 1 if requires_approval else 0,
+                execution_backend,
+                cli_tool_id,
                 now,
                 now,
             ),
@@ -84,7 +89,7 @@ class AgentTasksRepository:
         ).fetchall()
         return [_row_to_dict(row) for row in rows]
 
-    def list_runnable(self) -> list[dict[str, Any]]:
+    def list_runnable(self, *, execution_backend: str | None = None) -> list[dict[str, Any]]:
         """Queued tasks whose dependency (if any) has already completed —
         what the scheduler is allowed to start next, across every
         project (the background loop runs globally, not per-project).
@@ -96,7 +101,16 @@ class AgentTasksRepository:
         `status`, so a resumed workflow's tasks pick back up exactly
         where they were — and a task with `requires_approval` set is only
         runnable once a human has explicitly approved it (Manual Approval
-        mode)."""
+        mode).
+
+        `execution_backend` (Sprint 16): the API-provider scheduler
+        (`app.ai.orchestration.manager.run_cycle`) and the CLI-tool
+        dispatcher (Electron's poller, via GET /agents/tasks/cli-runnable)
+        each only claim tasks meant for them — an 'api' task must never
+        be picked up by the CLI dispatcher's `claim-cli-dispatch`, and a
+        'cli' task must never reach `get_provider()`, which doesn't know
+        CLI tool ids and would raise `UnknownProviderError`. `None`
+        (the default) returns both, for callers that don't care."""
         queued = self._connection.execute(
             """
             SELECT agent_tasks.* FROM agent_tasks
@@ -105,8 +119,10 @@ class AgentTasksRepository:
               AND (workflows.status IS NULL
                    OR workflows.status IN ('planning', 'queued', 'running'))
               AND (agent_tasks.requires_approval = 0 OR agent_tasks.approved_at IS NOT NULL)
+              AND (? IS NULL OR agent_tasks.execution_backend = ?)
             ORDER BY agent_tasks.priority ASC, agent_tasks.created_at ASC
-            """
+            """,
+            (execution_backend, execution_backend),
         ).fetchall()
         runnable: list[dict[str, Any]] = []
         for row in queued:
@@ -215,6 +231,20 @@ class AgentTasksRepository:
         self._connection.commit()
         return cursor.rowcount > 0
 
+    def set_conversation_id(self, task_id: str, conversation_id: str) -> None:
+        """Sprint 16: the CLI dispatch path spans two HTTP calls
+        (`claim-cli-dispatch` then `record-cli-result`) rather than one
+        continuous in-process call like the API path — the conversation
+        created during claim needs to be findable again when the result
+        comes back, so it's persisted onto the task immediately instead
+        of waiting for `mark_completed` (which the API path already does
+        in a single step)."""
+        self._connection.execute(
+            "UPDATE agent_tasks SET conversation_id = ?, updated_at = ? WHERE id = ?",
+            (conversation_id, datetime.now(UTC).isoformat(), task_id),
+        )
+        self._connection.commit()
+
     def update_live_output(self, task_id: str, content: str) -> None:
         """Sprint 13: periodically flushed (not per-chunk) accumulated
         streamed text for a `running` task — the AI Thinking Panel's data
@@ -231,22 +261,27 @@ class AgentTasksRepository:
         self,
         task_id: str,
         *,
-        conversation_id: str,
+        conversation_id: str | None,
         result_summary: str,
         proposed_files: list[dict[str, str]] | None,
+        files_changed: list[str] | None = None,
+        cli_exit_code: int | None = None,
     ) -> None:
         now = datetime.now(UTC).isoformat()
         self._connection.execute(
             """
             UPDATE agent_tasks
             SET status = 'completed', conversation_id = ?, result_summary = ?,
-                proposed_files = ?, completed_at = ?, updated_at = ?, live_output = NULL
+                proposed_files = ?, files_changed = ?, cli_exit_code = ?,
+                completed_at = ?, updated_at = ?, live_output = NULL
             WHERE id = ?
             """,
             (
                 conversation_id,
                 result_summary,
                 json.dumps(proposed_files) if proposed_files else None,
+                json.dumps(files_changed) if files_changed else None,
+                cli_exit_code,
                 now,
                 now,
                 task_id,
@@ -371,4 +406,6 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     data = dict(row)
     if data.get("proposed_files"):
         data["proposed_files"] = json.loads(data["proposed_files"])
+    if data.get("files_changed"):
+        data["files_changed"] = json.loads(data["files_changed"])
     return data

@@ -51,6 +51,17 @@ let watcher: FSWatcher | null = null;
 let changeListener: ((event: { path: string }) => void) | null = null;
 let pendingNotifyPath: string | null = null;
 let notifyDebounceTimer: NodeJS.Timeout | null = null;
+// Sprint 16: the CLI dispatch poller (cli-tools.ts) runs on its own
+// interval in main.ts, not driven by a renderer call the way `git:status`/
+// `build:run`/etc. are (those already receive `projectPath` as an
+// explicit argument each time) — it needs to know the open project's path
+// without one, so it's tracked here alongside the watcher, which is the
+// existing single source of truth for "what project is currently open".
+let currentProjectPath: string | null = null;
+
+export function getCurrentProjectPath(): string | null {
+  return currentProjectPath;
+}
 
 export function setChangeListener(listener: ((event: { path: string }) => void) | null): void {
   changeListener = listener;
@@ -240,11 +251,13 @@ export async function openProject(projectPath: string): Promise<boolean> {
   // the process with a libuv assertion — see docs/ARCHITECTURE.md.
   const realPath = await fs.realpath(projectPath);
   await startWatching(realPath);
+  currentProjectPath = realPath;
   return true;
 }
 
 export function closeProject(): void {
   stopWatching();
+  currentProjectPath = null;
 }
 
 function startWatching(rootPath: string): Promise<void> {

@@ -4,6 +4,7 @@ import { IconButton } from '../common/IconButton';
 import { GeneralSettingsTab } from './GeneralSettingsTab';
 import { EditorSettingsTab } from './EditorSettingsTab';
 import { AiProvidersTab } from './AiProvidersTab';
+import { AiCodingControlTab } from './AiCodingControlTab';
 import { ModelsTab } from './ModelsTab';
 import { UsageTab } from './UsageTab';
 import { SecurityTab } from './SecurityTab';
@@ -17,6 +18,7 @@ const TABS = [
   { id: 'general', label: 'General' },
   { id: 'editor', label: 'Editor' },
   { id: 'providers', label: 'AI Providers' },
+  { id: 'coding-control', label: 'AI Coding Control' },
   { id: 'models', label: 'Models' },
   { id: 'usage', label: 'Usage' },
   { id: 'security', label: 'Security' },
@@ -74,6 +76,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
             {activeTab === 'general' && <GeneralSettingsTab />}
             {activeTab === 'editor' && <EditorSettingsTab />}
             {activeTab === 'providers' && <AiProvidersTab />}
+            {activeTab === 'coding-control' && <AiCodingControlTab />}
             {activeTab === 'models' && <ModelsTab />}
             {activeTab === 'usage' && <UsageTab />}
             {activeTab === 'security' && <SecurityTab />}

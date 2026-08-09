@@ -17,6 +17,13 @@ import type {
   FileSnapshotInput,
   RollbackInfo,
 } from './agent-client';
+import type {
+  CliToolStatus,
+  ExecutionDecision,
+  ExecutionMode,
+  ExecutionPolicy,
+} from './cli-tools-client';
+import type { CliOutputEvent } from './cli-tools';
 import type { ApprovalMode, FeatureSummary, Workflow, WorkflowDetail } from './workflow-client';
 import type { GitStatus } from './git-status';
 import type {
@@ -164,6 +171,7 @@ const agentsApi = {
     model: string;
     priority?: number;
     stages?: AgentRoleKey[];
+    useTaskRouter?: boolean;
   }): Promise<AgentTask[]> => ipcRenderer.invoke('agents:create-pipeline', input),
   cancelTask: (taskId: string): Promise<void> => ipcRenderer.invoke('agents:cancel-task', taskId),
   retryTask: (taskId: string): Promise<AgentTask> =>
@@ -180,6 +188,32 @@ const agentsApi = {
     const listener = () => callback();
     ipcRenderer.on('agents:tasks-changed', listener);
     return () => ipcRenderer.removeListener('agents:tasks-changed', listener);
+  },
+};
+
+const cliToolsApi = {
+  // Sprint 16: Multi-AI Subscription Coding Control Center.
+  getStatus: (): Promise<CliToolStatus[]> => ipcRenderer.invoke('cli-tools:status'),
+  getExecutionPolicy: (): Promise<ExecutionPolicy> =>
+    ipcRenderer.invoke('cli-tools:get-execution-policy'),
+  updateExecutionPolicy: (update: {
+    mode?: ExecutionMode;
+    subscriptionFirst?: boolean;
+  }): Promise<ExecutionPolicy> => ipcRenderer.invoke('cli-tools:update-execution-policy', update),
+  resolveExecution: (input: {
+    role: AgentRoleKey;
+    apiProviderId?: string | null;
+    apiProviderDisplayName?: string | null;
+    apiProviderConfigured?: boolean;
+  }): Promise<ExecutionDecision> => ipcRenderer.invoke('cli-tools:resolve-execution', input),
+  isDispatchActive: (): Promise<boolean> => ipcRenderer.invoke('cli-tools:is-dispatch-active'),
+  cancelDispatch: (taskId: string): Promise<boolean> =>
+    ipcRenderer.invoke('cli-tools:cancel-dispatch', taskId),
+  onOutput: (callback: (event: CliOutputEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: CliOutputEvent) =>
+      callback(payload);
+    ipcRenderer.on('cli-tools:output', listener);
+    return () => ipcRenderer.removeListener('cli-tools:output', listener);
   },
 };
 
@@ -344,6 +378,7 @@ contextBridge.exposeInMainWorld('nemi', {
   ai: aiApi,
   providers: providersApi,
   agents: agentsApi,
+  cliTools: cliToolsApi,
   workflows: workflowsApi,
   system: systemApi,
   git: gitApi,

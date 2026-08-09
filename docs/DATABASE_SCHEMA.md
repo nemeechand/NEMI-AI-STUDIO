@@ -282,6 +282,10 @@ Index: `idx_ai_messages_conversation_id` on `conversation_id`.
 | conflict_warning    | TEXT    | (Sprint 12)                                                           | nullable — set when another task in the same workflow proposed an overlapping file path (see ARCHITECTURE.md's conflict detection) |
 | live_output         | TEXT    | (Sprint 13)                                                           | nullable — the accumulated-so-far streamed text of a currently `running` task, flushed periodically (not per-chunk); the Live Development Dashboard's AI Thinking Panel data source; cleared to NULL on completion/failure/cancellation |
 | rolled_back_at      | TEXT    | (Sprint 15)                                                           | nullable — set by `POST /agents/tasks/{id}/mark-rolled-back` once Electron has actually restored/deleted every file recorded in `file_snapshots` for this task; also resets `proposed_files_applied` to 0 |
+| execution_backend   | TEXT    | (Sprint 16) NOT NULL, DEFAULT 'api'                                   | `'api'` (an `AIProvider`, unchanged Sprint 10 behavior) or `'cli'` (a subscription coding CLI — see `app/ai/cli_tools.py`); `provider` holds the CLI tool id (`codex-cli`/`claude-code-cli`/`gemini-cli`) when `'cli'` |
+| cli_tool_id         | TEXT    | (Sprint 16)                                                           | nullable — set only when `execution_backend = 'cli'`, redundant with `provider` in that case but kept as its own typed column for clarity at query time |
+| files_changed       | TEXT    | (Sprint 16)                                                           | nullable, JSON-encoded array of paths — a CLI task's real, already-committed changed files (via `frontend/electron/cli-tools.ts`'s checkpoint-commit-diff), distinct from `proposed_files` (API Developer tasks only, never auto-applied) |
+| cli_exit_code       | INTEGER | (Sprint 16)                                                           | nullable — the CLI process's real exit code, set by `POST /agents/tasks/{id}/record-cli-result` |
 | created_at          | TEXT    | NOT NULL                                                              |                                                    |
 | updated_at          | TEXT    | NOT NULL                                                              |                                                    |
 | started_at          | TEXT    |                                                                        | nullable                                          |
@@ -506,6 +510,24 @@ notes above). `agent_provider_defaults` is free to include
 `'documentation'` in its own CHECK because it's a brand-new table, not
 an existing one under the SQLite "can't alter a CHECK in place" limit.
 
+## execution_policy (Sprint 16)
+
+| Column             | Type    | Constraints                                                          | Notes |
+|---------------------|---------|------------------------------------------------------------------------|-----------|
+| id                  | TEXT    | PRIMARY KEY                                                           | always the literal string `'default'` — a singleton row, not one per anything |
+| mode                | TEXT    | NOT NULL, CHECK IN ('auto','codex-cli','claude-code-cli','gemini-cli'), DEFAULT 'auto' | Task Router mode — `'auto'` or an explicit CLI tool id pin |
+| subscription_first  | INTEGER | NOT NULL, DEFAULT 1                                                   | boolean (0/1) — Auto mode prefers an authenticated CLI over the configured API provider when true (the default) |
+| updated_at          | TEXT    | NOT NULL                                                              | |
+
+The Multi-AI Subscription Coding Control Center's global policy
+(Settings → AI Coding Control). A singleton table rather than a row in
+the generic `settings` key-value table — matches `provider_settings`/
+`agent_provider_defaults`'s precedent that structured config gets real
+columns. *Per-role* preferred agent is deliberately **not** duplicated
+here — that's what `agent_provider_defaults.provider` already is
+(Sprint 15.5), and it already accepts any provider id including the
+three CLI tool ids this sprint registers (`app/ai/cli_tools.py`).
+
 ---
 
 # RELATIONSHIPS
@@ -542,11 +564,13 @@ model_favorites          (standalone, provider_id/model_id are plain values,
                            not FKs — same reasoning as provider_settings)
 agent_provider_defaults  (standalone, keyed by agent_role — provider is a
                            plain provider id value, not a FK)
+execution_policy         (standalone singleton, id is always 'default' —
+                           not a FK to anything)
 ```
 
 ---
 
-# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7, Sprint 10, Sprint 11, Sprint 12, Sprint 13, Sprint 14, Sprint 15, Sprint 15.5, Sprint 15.6)
+# IMPLEMENTATION STATUS (Sprint 4; updated Sprint 7, Sprint 10, Sprint 11, Sprint 12, Sprint 13, Sprint 14, Sprint 15, Sprint 15.5, Sprint 15.6, Sprint 16)
 
 - Schema implemented exactly as designed above:
   `backend/app/db/schema.py::SCHEMA_STATEMENTS` /  `init_db()`.
@@ -702,6 +726,15 @@ agent_provider_defaults  (standalone, keyed by agent_role — provider is a
   this pattern is the documented approach for any future additive
   column change, revisit again if a column ever needs to be removed or
   changed in a way `ALTER TABLE ADD COLUMN` can't express.
+- **(Sprint 16)** Four additive/defaulted columns on `agent_tasks`
+  (`execution_backend`, `cli_tool_id`, `files_changed`, `cli_exit_code`)
+  and one new standalone singleton table (`execution_policy`) for the
+  Multi-AI Subscription Coding Control Center / Task Router. No secrets
+  of any kind are stored for the three CLI tools — only their detected
+  installed/authenticated *state* ever reaches the database, and only
+  transiently via API responses, never persisted; see
+  `docs/ARCHITECTURE.md`'s Sprint 16 section for the authentication
+  model.
 
 ---
 

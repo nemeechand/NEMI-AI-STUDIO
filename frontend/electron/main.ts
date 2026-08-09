@@ -21,6 +21,7 @@ import {
   createDirectory,
   createFile,
   deleteEntry,
+  getCurrentProjectPath,
   listAllFiles,
   listDirectory,
   openProject,
@@ -64,18 +65,35 @@ import {
 import {
   approveAgentTask,
   cancelAgentTask,
+  claimCliDispatch,
   createAgentPipeline,
   getAgentTask,
   getRollbackInfo,
   listAgentTasks,
   listAgents,
+  listCliRunnableTasks,
   markAgentTaskFilesApplied,
   markAgentTaskRolledBack,
+  recordCliResult,
   retryAgentTask,
   runAgentCycle,
   type AgentRoleKey,
   type FileSnapshotInput,
 } from './agent-client';
+import {
+  getCliToolStatus,
+  getExecutionPolicy,
+  resolveExecution,
+  updateExecutionPolicy,
+} from './cli-tools-client';
+import {
+  cancelCliDispatch,
+  commitCliChanges,
+  dispatchCliTask,
+  isCliDispatchActive,
+  prepareCliCheckpoint,
+  type CliOutputEvent,
+} from './cli-tools';
 import {
   cancelWorkflow,
   createWorkflow,
@@ -385,6 +403,7 @@ ipcMain.handle(
       model: string;
       priority?: number;
       stages?: AgentRoleKey[];
+      useTaskRouter?: boolean;
     },
   ) => createAgentPipeline(input),
 );
@@ -432,6 +451,39 @@ ipcMain.handle(
 ipcMain.handle('workflows:get-summary', (_event, workflowId: string) =>
   getFeatureSummary(workflowId),
 );
+
+// Sprint 16: Multi-AI Subscription Coding Control Center. Detection and
+// the Task Router's decision logic live entirely in the backend
+// (app/ai/cli_tools.py, app/ai/orchestration/task_router.py) — Electron
+// only proxies to them, plus owns actually spawning the CLI process and
+// the git safety checkpoint, since both need the open project's real
+// filesystem path (Sprint 5's Filesystem Ownership rule).
+ipcMain.handle('cli-tools:status', () => getCliToolStatus());
+ipcMain.handle('cli-tools:get-execution-policy', () => getExecutionPolicy());
+ipcMain.handle(
+  'cli-tools:update-execution-policy',
+  (
+    _event,
+    update: {
+      mode?: 'auto' | 'codex-cli' | 'claude-code-cli' | 'gemini-cli';
+      subscriptionFirst?: boolean;
+    },
+  ) => updateExecutionPolicy(update),
+);
+ipcMain.handle(
+  'cli-tools:resolve-execution',
+  (
+    _event,
+    input: {
+      role: AgentRoleKey;
+      apiProviderId?: string | null;
+      apiProviderDisplayName?: string | null;
+      apiProviderConfigured?: boolean;
+    },
+  ) => resolveExecution(input),
+);
+ipcMain.handle('cli-tools:is-dispatch-active', () => isCliDispatchActive());
+ipcMain.handle('cli-tools:cancel-dispatch', (_event, taskId: string) => cancelCliDispatch(taskId));
 
 ipcMain.handle('system:resource-usage', () => getBackendResourceUsage());
 ipcMain.handle('system:get-metrics', (_event, projectPath: string) =>
@@ -565,6 +617,109 @@ async function runAgentCycleOnce(): Promise<void> {
   }
 }
 
+// Sprint 16: the CLI-dispatch counterpart of `runAgentCycleOnce` above —
+// same steady-poll shape, but for 'cli' tasks (app.ai.orchestration.
+// manager's claim_cli_dispatch/record_cli_result), since running an
+// external coding CLI needs the open project's real filesystem path and
+// a spawned OS process, both Electron-main concerns. Deliberately never
+// runs more than one CLI dispatch at once (cli-tools.ts's single-flight
+// guard) — "never allow two coding agents to modify the same files
+// simultaneously".
+const CLI_DISPATCH_CYCLE_INTERVAL_MS = 5_000;
+let cliDispatchTimer: ReturnType<typeof setInterval> | null = null;
+let cliDispatchCycleInProgress = false;
+
+function cliDispatchOutput(event: CliOutputEvent): void {
+  mainWindow?.webContents.send('cli-tools:output', event);
+}
+
+async function runCliDispatchCycleOnce(): Promise<void> {
+  if (cliDispatchCycleInProgress || isCliDispatchActive()) return;
+  const projectPath = getCurrentProjectPath();
+  if (!projectPath) return;
+  cliDispatchCycleInProgress = true;
+  try {
+    const runnable = await listCliRunnableTasks();
+    if (runnable.length === 0) return;
+    const next = runnable[0];
+    const claimed = await claimCliDispatch(next.id);
+    mainWindow?.webContents.send('agents:tasks-changed', {});
+
+    // From here on, the task is already 'running' in the backend — any
+    // failure (including one this code didn't anticipate) MUST reach
+    // record-cli-result, or the task would be silently stuck 'running'
+    // until the next full backend restart's requeue_orphaned_running_tasks().
+    // This is the CLI path's equivalent of _run_task's broad except
+    // clause calling _handle_failure for the API path.
+    try {
+      const checkpoint = await prepareCliCheckpoint(projectPath);
+      if (!checkpoint.ok || !checkpoint.beforeCommit) {
+        await recordCliResult(claimed.task.id, {
+          success: false,
+          exitCode: null,
+          output: '',
+          filesChanged: [],
+          errorMessage: checkpoint.reason ?? 'Could not prepare a git safety checkpoint.',
+        });
+        return;
+      }
+
+      const result = await dispatchCliTask({
+        taskId: claimed.task.id,
+        cliToolId: claimed.cli_tool_id as Parameters<typeof dispatchCliTask>[0]['cliToolId'],
+        prompt: claimed.prompt,
+        projectPath,
+        onOutput: cliDispatchOutput,
+      });
+
+      let filesChanged: string[] = [];
+      if (result.success) {
+        filesChanged = await commitCliChanges(
+          projectPath,
+          checkpoint.beforeCommit,
+          claimed.task.title,
+        ).catch(() => []);
+      }
+
+      await recordCliResult(claimed.task.id, {
+        success: result.success,
+        exitCode: result.exitCode,
+        output: result.output.slice(-190_000),
+        filesChanged,
+        errorMessage: result.success
+          ? null
+          : result.cancelled
+            ? result.timedOut
+              ? 'CLI agent timed out and was cancelled.'
+              : 'Cancelled by user.'
+            : `CLI tool exited with code ${result.exitCode ?? 'unknown'}.`,
+      });
+    } catch (error) {
+      await recordCliResult(claimed.task.id, {
+        success: false,
+        exitCode: null,
+        output: '',
+        filesChanged: [],
+        errorMessage: `Unexpected error dispatching CLI agent: ${String(
+          error instanceof Error ? error.message : error,
+        )}`,
+      }).catch(() => {
+        // The task is left 'running'; requeue_orphaned_running_tasks()
+        // recovers it on next backend restart if even this call fails
+        // (e.g. the backend itself became unreachable mid-dispatch).
+      });
+    } finally {
+      mainWindow?.webContents.send('agents:tasks-changed', {});
+    }
+  } catch {
+    // Nothing was claimed yet (listCliRunnableTasks/claimCliDispatch
+    // itself failed — e.g. backend not reachable) — safe to just retry
+    // next tick, no task is stuck.
+  } finally {
+    cliDispatchCycleInProgress = false;
+  }
+}
+
 // Sprint 15.6: without this, launching NEMI AI Studio a second time (a
 // double-click, a second Start Menu launch while the first is still open)
 // silently spawned a second Electron process, which spawned its own
@@ -590,6 +745,10 @@ if (!gotSingleInstanceLock) {
       mainWindow?.webContents.send('fs:changed', event);
     });
     agentCycleTimer = setInterval(() => void runAgentCycleOnce(), AGENT_RUN_CYCLE_INTERVAL_MS);
+    cliDispatchTimer = setInterval(
+      () => void runCliDispatchCycleOnce(),
+      CLI_DISPATCH_CYCLE_INTERVAL_MS,
+    );
   });
 
   app.on('window-all-closed', () => {
@@ -619,6 +778,7 @@ if (!gotSingleInstanceLock) {
     isQuitting = true;
     void (async () => {
       if (agentCycleTimer) clearInterval(agentCycleTimer);
+      if (cliDispatchTimer) clearInterval(cliDispatchTimer);
       await stopBackend();
       closeProject();
       app.quit();

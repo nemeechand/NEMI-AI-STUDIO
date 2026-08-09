@@ -4,8 +4,23 @@ import {
   WORKFLOW_STATUS_DOT_CLASS,
   WORKFLOW_STATUS_LABELS,
 } from '../agents/roleMeta';
+import { useIntelligence } from '../../intelligence/useIntelligence';
 import { formatDuration } from './sections';
 import { useActiveWorkflow } from './useActiveWorkflow';
+
+const CLI_TOOL_LABELS: Record<CliToolId, string> = {
+  'codex-cli': 'ChatGPT / Codex',
+  'claude-code-cli': 'Claude Code',
+  'gemini-cli': 'Gemini CLI',
+};
+
+const TEST_RUNNER_LABELS: Record<RunnerState, string> = {
+  idle: 'Not run',
+  running: 'Running…',
+  success: 'Passing',
+  failed: 'Failing',
+  cancelled: 'Cancelled',
+};
 
 function computeEta(tasks: AgentTask[]): number | null {
   const completed = tasks.filter((t) => t.status === 'completed' && t.started_at && t.completed_at);
@@ -23,6 +38,7 @@ function computeEta(tasks: AgentTask[]): number | null {
 
 export function SprintCenterSection() {
   const workflow = useActiveWorkflow();
+  const { runners } = useIntelligence();
 
   const stats = useMemo(() => {
     if (!workflow) return null;
@@ -81,7 +97,23 @@ export function SprintCenterSection() {
         <Stat label="Current Task" value={stats.currentTask?.title ?? 'Idle'} />
         <Stat
           label="Current Agent"
-          value={stats.currentTask ? stats.currentTask.agent_role : '—'}
+          value={
+            stats.currentTask
+              ? stats.currentTask.execution_backend === 'cli' && stats.currentTask.cli_tool_id
+                ? `${CLI_TOOL_LABELS[stats.currentTask.cli_tool_id]} (${stats.currentTask.agent_role})`
+                : stats.currentTask.agent_role
+              : '—'
+          }
+        />
+        <Stat
+          label="Execution Mode"
+          value={
+            stats.currentTask
+              ? stats.currentTask.execution_backend === 'cli'
+                ? 'Subscription CLI'
+                : 'API provider'
+              : '—'
+          }
         />
         <Stat label="ETA" value={eta !== null ? formatDuration(eta) : 'Calculating…'} />
         <Stat
@@ -89,6 +121,7 @@ export function SprintCenterSection() {
           value={stats.elapsedSeconds !== null ? formatDuration(stats.elapsedSeconds) : '—'}
         />
         <Stat label="Remaining Tasks" value={String(stats.remainingTasks.length)} />
+        <Stat label="Running Tests" value={TEST_RUNNER_LABELS[runners.test.state]} />
       </div>
 
       <div>

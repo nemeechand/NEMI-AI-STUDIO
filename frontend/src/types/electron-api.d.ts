@@ -232,10 +232,53 @@ declare global {
     conflict_warning: string | null;
     live_output: string | null;
     rolled_back_at: string | null;
+    // Sprint 16: Task Router / Multi-AI Subscription Coding Control Center.
+    execution_backend: 'api' | 'cli';
+    cli_tool_id: CliToolId | null;
+    files_changed: string[] | null;
+    cli_exit_code: number | null;
     created_at: string;
     updated_at: string;
     started_at: string | null;
     completed_at: string | null;
+  }
+
+  // --- Sprint 16: Multi-AI Subscription Coding Control Center ---
+
+  type CliToolId = 'codex-cli' | 'claude-code-cli' | 'gemini-cli';
+  type ExecutionMode = 'auto' | CliToolId;
+
+  interface CliToolStatus {
+    id: CliToolId;
+    display_name: string;
+    installed: boolean;
+    binary_path: string | null;
+    version: string | null;
+    authenticated: boolean | null;
+    available: boolean;
+    roles: AgentRoleKey[];
+    role_note: string;
+  }
+
+  interface ExecutionPolicy {
+    mode: ExecutionMode;
+    subscription_first: boolean;
+    updated_at: string | null;
+  }
+
+  interface ExecutionDecision {
+    available: boolean;
+    backend: 'api' | 'cli' | null;
+    execution_id: string | null;
+    display_name: string | null;
+    fallback_used: boolean;
+    reason: string;
+  }
+
+  interface CliOutputEvent {
+    taskId: string;
+    stream: 'stdout' | 'stderr';
+    chunk: string;
   }
 
   interface FileSnapshotInput {
@@ -641,6 +684,7 @@ declare global {
           model: string;
           priority?: number;
           stages?: AgentRoleKey[];
+          useTaskRouter?: boolean;
         }) => Promise<AgentTask[]>;
         cancelTask: (taskId: string) => Promise<void>;
         retryTask: (taskId: string) => Promise<AgentTask>;
@@ -649,6 +693,23 @@ declare global {
         getRollbackInfo: (taskId: string) => Promise<RollbackInfo>;
         markRolledBack: (taskId: string) => Promise<AgentTask>;
         onTasksChanged: (callback: () => void) => () => void;
+      };
+      cliTools: {
+        getStatus: () => Promise<CliToolStatus[]>;
+        getExecutionPolicy: () => Promise<ExecutionPolicy>;
+        updateExecutionPolicy: (update: {
+          mode?: ExecutionMode;
+          subscriptionFirst?: boolean;
+        }) => Promise<ExecutionPolicy>;
+        resolveExecution: (input: {
+          role: AgentRoleKey;
+          apiProviderId?: string | null;
+          apiProviderDisplayName?: string | null;
+          apiProviderConfigured?: boolean;
+        }) => Promise<ExecutionDecision>;
+        isDispatchActive: () => Promise<boolean>;
+        cancelDispatch: (taskId: string) => Promise<boolean>;
+        onOutput: (callback: (event: CliOutputEvent) => void) => () => void;
       };
       workflows: {
         list: (projectId: string | null) => Promise<Workflow[]>;

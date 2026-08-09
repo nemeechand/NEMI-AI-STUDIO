@@ -344,6 +344,27 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         updated_at TEXT NOT NULL
     )
     """,
+    # Sprint 16: the Task Router's persisted policy. A singleton row
+    # (`id = 'default'`) rather than a new key-value convention — this is
+    # exactly two flat fields, so a dedicated table with real columns
+    # matches `provider_settings`/`agent_provider_defaults`'s precedent of
+    # "structured settings get their own table" more directly than
+    # reusing the generic `settings` blob would. `mode` is 'auto' or one
+    # of the three CLI tool ids (an explicit, non-Auto choice); which
+    # provider/CLI each *role* prefers is deliberately NOT duplicated here
+    # — that's what `agent_provider_defaults.provider` already is (Sprint
+    # 15.5), and it already accepts any provider id, including the three
+    # new CLI tool ids this sprint registers. See app/ai/cli_tools.py.
+    """
+    CREATE TABLE IF NOT EXISTS execution_policy (
+        id TEXT PRIMARY KEY,
+        mode TEXT NOT NULL
+            CHECK (mode IN ('auto', 'codex-cli', 'claude-code-cli', 'gemini-cli'))
+            DEFAULT 'auto',
+        subscription_first INTEGER NOT NULL DEFAULT 1,
+        updated_at TEXT NOT NULL
+    )
+    """,
 )
 
 
@@ -408,4 +429,22 @@ def init_db(connection: sqlite3.Connection) -> None:
     # Sprint 15.5: real wall-clock milliseconds from request start to the
     # provider's final StreamDone event — the AI Chat's "Response Time".
     _add_column_if_missing(connection, "ai_messages", "latency_ms", "INTEGER")
+    # Sprint 16: which kind of execution actually ran this task. Additive/
+    # defaulted so every pre-Sprint-16 row is implicitly 'api' (correct —
+    # CLI-tool execution didn't exist before this sprint), same pattern as
+    # every prior agent_tasks column addition above. `cli_tool_id` is one
+    # of app.ai.cli_tools' three registered ids when execution_backend is
+    # 'cli', else NULL. `files_changed` is the real list of paths a CLI
+    # coding tool actually wrote to disk (detected via git diff against
+    # the pre-dispatch checkpoint commit — see frontend/electron/
+    # cli-tools.ts) — distinct from `proposed_files`, which only a
+    # Developer-role *API* task ever populates (Sprint 11's human-gated
+    # fenced-block proposals). `cli_exit_code` is the CLI process's real
+    # exit code, never fabricated.
+    _add_column_if_missing(
+        connection, "agent_tasks", "execution_backend", "TEXT NOT NULL DEFAULT 'api'"
+    )
+    _add_column_if_missing(connection, "agent_tasks", "cli_tool_id", "TEXT")
+    _add_column_if_missing(connection, "agent_tasks", "files_changed", "TEXT")
+    _add_column_if_missing(connection, "agent_tasks", "cli_exit_code", "INTEGER")
     connection.commit()

@@ -1,6 +1,7 @@
 import {
   Activity,
   Bell,
+  Bot,
   Boxes,
   Brain,
   Cpu,
@@ -19,6 +20,7 @@ export type SectionId =
   | 'health'
   | 'sprint'
   | 'agents'
+  | 'coding-control'
   | 'workflow'
   | 'terminal'
   | 'thinking'
@@ -34,6 +36,7 @@ export const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: 'health', label: 'Health Center', icon: HeartPulse },
   { id: 'sprint', label: 'Sprint Center', icon: Activity },
   { id: 'agents', label: 'Agent Monitor', icon: Users },
+  { id: 'coding-control', label: 'AI Coding Control', icon: Bot },
   { id: 'workflow', label: 'Workflow View', icon: Workflow },
   { id: 'terminal', label: 'Terminal', icon: Terminal },
   { id: 'thinking', label: 'AI Thinking', icon: Brain },

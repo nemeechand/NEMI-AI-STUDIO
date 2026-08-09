@@ -4,6 +4,7 @@ import re
 import sqlite3
 from typing import Any
 
+from app.ai.cli_tools import CLI_TOOLS
 from app.db.repositories.agent_provider_defaults_repository import (
     AgentProviderDefaultsRepository,
 )
@@ -66,6 +67,22 @@ def parse_milestones(content: str) -> list[dict[str, str]]:
     return milestones
 
 
+def _resolve_execution(provider: str) -> tuple[str, str | None]:
+    """Sprint 16: `agent_provider_defaults.provider` (Sprint 15.5) is a
+    free-text column that already accepts any provider id — including
+    the three CLI tool ids the Settings' "AI Coding Control" tab can now
+    write there (see AiCodingControlTab.tsx). A pipeline created from a
+    role whose override IS a CLI tool id must be marked
+    `execution_backend='cli'`, or `run_cycle`'s API-provider poller would
+    try `get_provider()` on it and raise `UnknownProviderError` — this is
+    the one place that resolution has to happen for goal-driven (Sprint
+    12 AI Project Manager) pipelines, mirroring what api/agents.py's
+    create_pipeline already does for ad-hoc (`use_task_router`) ones."""
+    if provider in CLI_TOOLS:
+        return "cli", provider
+    return "api", None
+
+
 def create_milestone_pipelines(
     connection: sqlite3.Connection,
     *,
@@ -99,6 +116,10 @@ def create_milestone_pipelines(
         )
         for role in _MILESTONE_PIPELINE:
             override = role_defaults.get(role)
+            provider = override["provider"] if override else workflow["provider"]
+            execution_backend, cli_tool_id = _resolve_execution(provider)
+            fallback_model = override["model"] if override else workflow["model"]
+            model = "local" if cli_tool_id else fallback_model
             task = tasks_repo.create(
                 project_id=workflow["project_id"],
                 title=f"{milestone['title']} — {role.capitalize()}",
@@ -106,10 +127,12 @@ def create_milestone_pipelines(
                 agent_role=role,
                 priority=2,
                 depends_on_task_id=previous_stage_task_id,
-                provider=override["provider"] if override else workflow["provider"],
-                model=override["model"] if override else workflow["model"],
+                provider=provider,
+                model=model,
                 workflow_id=workflow["id"],
                 milestone_id=milestone["id"],
                 requires_approval=requires_approval,
+                execution_backend=execution_backend,
+                cli_tool_id=cli_tool_id,
             )
             previous_stage_task_id = task["id"]

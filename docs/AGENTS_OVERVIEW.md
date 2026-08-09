@@ -104,6 +104,22 @@ Claude Code during development. That runtime implementation is not
 started; it depends on AI provider integration and the `agents`
 database table (see `docs/DATABASE_SCHEMA.md`), both future sprints.
 
+**Update (Sprint 11 onward, this note added Sprint 16):** the runtime
+system described above as "not started" now exists — Sprint 11's Agent
+Orchestration Framework runs four of these eight roles (Planner,
+Developer, Reviewer, Tester) as a real, live-orchestrated task queue in
+NEMI itself, executed against an `AIProvider` (Sprint 10/15.5). Sprint
+16 extended *how* that execution can happen without adding a ninth
+role or changing what any role means: a Developer-role task can now be
+carried out either by an API-based `AIProvider` (unchanged since
+Sprint 10) or by dispatching to the user's own external Claude Code
+CLI, Codex CLI, or Gemini CLI subscription (`app/ai/cli_tools.py`,
+`docs/ARCHITECTURE.md`'s Sprint 16 section) — the role's responsibility
+boundary (per this document's roster table) is identical either way;
+only which real AI process fulfills it differs. Architect, Debugger,
+Documentation, and Release Manager remain chat-invokable personas
+outside the automated pipeline, unchanged.
+
 ---
 
 END OF DOCUMENT

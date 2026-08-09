@@ -370,6 +370,13 @@ Always sanitize outputs.
 
 Use least privilege.
 
+For subscription-based external tools (Sprint 16: ChatGPT/Codex CLI,
+Claude Code CLI, Gemini CLI), never request, store, or transmit their
+credentials — detect installed/authenticated state via the tool's own
+official mechanism only (PATH lookup, credential-file existence),
+never by reading credential contents, scraping a login page, or
+bypassing authentication.
+
 ---
 
 # PERFORMANCE RULES

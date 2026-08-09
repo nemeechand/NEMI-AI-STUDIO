@@ -209,6 +209,13 @@ class AgentTaskOut(BaseModel):
     conflict_warning: str | None = None
     live_output: str | None = None
     rolled_back_at: str | None = None
+    # Sprint 16: Task Router fields — 'api' (default, unchanged behavior)
+    # or 'cli' when this task is dispatched to an external subscription
+    # coding CLI instead of an app.ai.providers.AIProvider.
+    execution_backend: Literal["api", "cli"] = "api"
+    cli_tool_id: str | None = None
+    files_changed: list[str] | None = None
+    cli_exit_code: int | None = None
     created_at: str
     updated_at: str
     started_at: str | None
@@ -247,6 +254,11 @@ class AgentPipelineCreate(BaseModel):
     model: str = Field(min_length=1)
     priority: int = Field(default=2, ge=1, le=4)
     stages: list[AgentRoleKey] = Field(default_factory=lambda: list(DEFAULT_PIPELINE), min_length=1)
+    # Sprint 16: when set, every stage created by this pipeline routes
+    # through the Task Router (per-stage, via `agent_provider_defaults` and
+    # `execution_policy`) instead of unconditionally using `provider`/
+    # `model` above — see POST /agents/tasks' handling in api/agents.py.
+    use_task_router: bool = False
 
 
 class AgentRunCycleRequest(BaseModel):
@@ -499,3 +511,64 @@ class MemoryEntryOut(BaseModel):
     value: str
     created_at: str
     updated_at: str
+
+
+# --- Multi-AI Subscription Coding Control Center / Task Router (Sprint 16) ---
+
+CliToolIdOut = Literal["codex-cli", "claude-code-cli", "gemini-cli"]
+ExecutionModeOut = Literal["auto", "codex-cli", "claude-code-cli", "gemini-cli"]
+
+
+class CliToolStatusOut(BaseModel):
+    id: CliToolIdOut
+    display_name: str
+    installed: bool
+    binary_path: str | None
+    version: str | None
+    # None = unknown (installed but the credential-file heuristic found
+    # nothing to confirm either way) — never fabricated true/false.
+    authenticated: bool | None
+    available: bool
+    roles: list[AgentRoleKey]
+    role_note: str
+
+
+class ExecutionPolicyOut(BaseModel):
+    mode: ExecutionModeOut
+    subscription_first: bool
+    updated_at: str | None
+
+
+class ExecutionPolicyUpdate(BaseModel):
+    mode: ExecutionModeOut | None = None
+    subscription_first: bool | None = None
+
+
+class ResolveExecutionRequest(BaseModel):
+    role: AgentRoleKey
+    api_provider_id: str | None = None
+    api_provider_display_name: str | None = None
+    api_provider_configured: bool = False
+
+
+class ExecutionDecisionOut(BaseModel):
+    available: bool
+    backend: Literal["api", "cli"] | None
+    execution_id: str | None
+    display_name: str | None
+    fallback_used: bool
+    reason: str
+
+
+class ClaimCliDispatchOut(BaseModel):
+    task: AgentTaskOut
+    cli_tool_id: CliToolIdOut
+    prompt: str
+
+
+class RecordCliResultRequest(BaseModel):
+    success: bool
+    exit_code: int | None = None
+    output: str = Field(default="", max_length=200_000)
+    files_changed: list[str] = Field(default_factory=list)
+    error_message: str | None = Field(default=None, max_length=4000)

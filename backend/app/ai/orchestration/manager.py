@@ -81,7 +81,11 @@ async def run_cycle(settings: Settings, api_keys: dict[str, str]) -> int:
     them for anything but Ollama. Returns how many tasks were started.
     """
     with get_connection(settings) as connection:
-        runnable = AgentTasksRepository(connection).list_runnable()
+        # Sprint 16: only 'api' tasks belong to this poller — 'cli' tasks
+        # are claimed by Electron's own CLI dispatch poller via
+        # claim_cli_dispatch/record_cli_result below, since get_provider()
+        # below has no entry for a CLI tool id.
+        runnable = AgentTasksRepository(connection).list_runnable(execution_backend="api")
 
     batch = runnable[: min(MAX_CONCURRENT_TASKS, len(runnable))]
     if not batch:
@@ -156,7 +160,15 @@ def _handle_failure(settings: Settings, task_id: str, message: str) -> None:
                 )
 
 
-async def _execute(settings: Settings, task: dict[str, Any], api_keys: dict[str, str]) -> None:
+def build_task_prompt(settings: Settings, task: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
+    """Composes a task's full system prompt + user content — every bit of
+    memory/knowledge-graph/review-risk grounding `_execute` always did —
+    and creates its `ai_conversations`/system+user `ai_messages` rows.
+
+    Sprint 16: factored out of `_execute` so a CLI-dispatched task (see
+    `claim_cli_dispatch` below) gets identical grounding to an
+    API-provider task; only *how the response is obtained* differs
+    between the two paths, never how the task is framed."""
     role_key = task["agent_role"]
     roles_by_key = {r.key: r for r in load_agent_roles(settings.agents_dir)}
     role = roles_by_key.get(role_key)
@@ -170,10 +182,23 @@ async def _execute(settings: Settings, task: dict[str, Any], api_keys: dict[str,
     is_decomposition_task = bool(task["workflow_id"]) and task["milestone_id"] is None
 
     system_prompt = role.system_prompt
-    if role_key == "developer":
+    if role_key == "developer" and task["execution_backend"] == "api":
+        # The fenced-block "propose, don't write" instruction only makes
+        # sense for an API-based Developer task (Sprint 11's human-gated
+        # Apply/Reject flow). A CLI-backend Developer task (Sprint 16) is
+        # a real coding agent with its own direct filesystem write access
+        # in the project's working directory — telling it to only
+        # *propose* changes would suppress the very capability Task
+        # Router dispatched it for.
         system_prompt += _DEVELOPER_FILE_BLOCK_INSTRUCTION
     elif is_decomposition_task:
         system_prompt += MILESTONE_FORMAT_INSTRUCTION
+    if task["execution_backend"] == "cli":
+        system_prompt += (
+            "\n\nYou are running as a local CLI tool with direct read/write access to "
+            "the project's files in your current working directory. Make the necessary "
+            "changes directly on disk rather than only describing them."
+        )
 
     # Agent-to-agent communication: recall the dependency's result from
     # `memory` — durable, so it survives a backend restart mid-pipeline,
@@ -262,6 +287,15 @@ async def _execute(settings: Settings, task: dict[str, Any], api_keys: dict[str,
             conversation_id=conversation["id"], content=user_content, context_refs=None
         )
 
+    return system_prompt, user_content, conversation
+
+
+async def _execute(settings: Settings, task: dict[str, Any], api_keys: dict[str, str]) -> None:
+    """The 'api' execution path — unchanged behavior from before Sprint
+    16, just calling `build_task_prompt`/`finalize_task_result` instead
+    of doing the work inline."""
+    system_prompt, user_content, conversation = build_task_prompt(settings, task)
+
     provider = get_provider(task["provider"])
     api_key = api_keys.get(task["provider"])
     if provider.requires_api_key and not api_key:
@@ -296,11 +330,42 @@ async def _execute(settings: Settings, task: dict[str, Any], api_keys: dict[str,
             usage = event.usage
 
     content = "".join(accumulated)
-    proposed_files = _extract_proposed_files(content) if role_key == "developer" else []
+    finalize_task_result(
+        settings, task, conversation_id=conversation["id"], content=content, usage=usage
+    )
+
+
+def finalize_task_result(
+    settings: Settings,
+    task: dict[str, Any],
+    *,
+    conversation_id: str,
+    content: str,
+    usage: TokenUsage | None = None,
+    files_changed: list[str] | None = None,
+    cli_exit_code: int | None = None,
+) -> None:
+    """Everything that happens once a task's raw response text exists,
+    regardless of which backend produced it: extract a Developer's
+    proposed-file blocks (API path only — a CLI task's real changes are
+    already on disk, tracked via `files_changed` instead), persist the
+    assistant message, remember the result for dependent tasks, mark the
+    task completed, detect same-file conflicts, and — for a workflow's
+    decomposition task — turn the plan into real milestones. Sprint 16:
+    factored out of `_execute` so `record_cli_result` reuses it exactly,
+    rather than re-implementing this tail."""
+    role_key = task["agent_role"]
+    usage = usage or TokenUsage()
+    proposed_files = (
+        _extract_proposed_files(content)
+        if role_key == "developer" and task["execution_backend"] == "api"
+        else []
+    )
+    is_decomposition_task = bool(task["workflow_id"]) and task["milestone_id"] is None
 
     with get_connection(settings) as connection:
         MessagesRepository(connection).add_assistant_message(
-            conversation_id=conversation["id"],
+            conversation_id=conversation_id,
             content=content,
             provider=task["provider"],
             model=task["model"],
@@ -309,7 +374,7 @@ async def _execute(settings: Settings, task: dict[str, Any], api_keys: dict[str,
             completion_tokens=usage.completion_tokens,
         )
         ConversationsRepository(connection).touch(
-            conversation["id"], provider=task["provider"], model=task["model"]
+            conversation_id, provider=task["provider"], model=task["model"]
         )
         # Durable handoff for whatever task depends on this one.
         MemoryRepository(connection).remember(
@@ -317,9 +382,11 @@ async def _execute(settings: Settings, task: dict[str, Any], api_keys: dict[str,
         )
         AgentTasksRepository(connection).mark_completed(
             task["id"],
-            conversation_id=conversation["id"],
+            conversation_id=conversation_id,
             result_summary=content[:2000],
             proposed_files=proposed_files or None,
+            files_changed=files_changed,
+            cli_exit_code=cli_exit_code,
         )
 
         # Sprint 14: a task that needed one or more retries before it
@@ -340,9 +407,82 @@ async def _execute(settings: Settings, task: dict[str, Any], api_keys: dict[str,
 
         if role_key == "developer" and proposed_files and task["workflow_id"]:
             _detect_conflicts(connection, task, proposed_files)
+        elif role_key == "developer" and files_changed and task["workflow_id"]:
+            _detect_conflicts(connection, task, [{"path": p} for p in files_changed])
 
         if is_decomposition_task:
             _apply_decomposition(connection, task, content)
+
+
+async def claim_cli_dispatch(settings: Settings, task_id: str) -> dict[str, Any] | None:
+    """Sprint 16: the CLI-dispatch counterpart of `_run_task` — atomically
+    claims one queued 'cli' task (same `mark_running` race-guard), builds
+    its prompt with full grounding, and returns everything Electron needs
+    to actually spawn the CLI tool. Returns `None` if the task can't be
+    claimed (already claimed by an overlapping poll, cancelled, or not a
+    'cli' task) — the caller (POST /agents/tasks/{id}/claim-cli-dispatch)
+    turns that into a 404, never a fabricated dispatch."""
+    with get_connection(settings) as connection:
+        tasks_repo = AgentTasksRepository(connection)
+        task = tasks_repo.get(task_id)
+        if task is None or task["status"] != "queued" or task["execution_backend"] != "cli":
+            return None
+        if not tasks_repo.mark_running(task_id):
+            return None
+        task = tasks_repo.get(task_id)
+    assert task is not None
+
+    system_prompt, user_content, conversation = build_task_prompt(settings, task)
+    with get_connection(settings) as connection:
+        AgentTasksRepository(connection).set_conversation_id(task_id, conversation["id"])
+
+    combined_prompt = f"{system_prompt}\n\n---\n\n{user_content}"
+    return {"task": task, "cli_tool_id": task["cli_tool_id"], "prompt": combined_prompt}
+
+
+async def record_cli_result(
+    settings: Settings,
+    task_id: str,
+    *,
+    success: bool,
+    exit_code: int | None,
+    output: str,
+    files_changed: list[str],
+    error_message: str | None,
+    api_keys: dict[str, str],
+) -> dict[str, Any] | None:
+    """Sprint 16: called by Electron once a dispatched CLI process has
+    actually exited — mirrors `_run_task`'s success/failure branching
+    (including automatic retry-with-backoff and cascade-cancel of
+    dependents on permanent failure) and the same `_sync_workflow_progress`
+    call, so a CLI-routed pipeline stage behaves identically to an
+    API-routed one from the workflow/milestone's point of view."""
+    with get_connection(settings) as connection:
+        task = AgentTasksRepository(connection).get(task_id)
+    if task is None or task["status"] != "running":
+        return None
+
+    if not success:
+        _handle_failure(
+            settings, task_id, error_message or f"CLI tool exited with code {exit_code}."
+        )
+    else:
+        conversation_id = task["conversation_id"]
+        assert conversation_id is not None  # set by claim_cli_dispatch before this can run
+        finalize_task_result(
+            settings,
+            task,
+            conversation_id=conversation_id,
+            content=output,
+            files_changed=files_changed or None,
+            cli_exit_code=exit_code,
+        )
+
+    if task["workflow_id"]:
+        await _sync_workflow_progress(settings, task["workflow_id"], api_keys)
+
+    with get_connection(settings) as connection:
+        return AgentTasksRepository(connection).get(task_id)
 
 
 _STOPWORDS = {

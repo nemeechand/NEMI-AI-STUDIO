@@ -1887,6 +1887,165 @@ verification suite (still run manually, per `docs/RELEASE_CHECKLIST.md`).
 
 ---
 
+# MULTI-AI SUBSCRIPTION CODING CONTROL CENTER / TASK ROUTER (locked decision — Sprint 16)
+
+Turns NEMI into a control center for the user's own existing coding-CLI
+subscriptions (ChatGPT/Codex CLI, Claude Code CLI, Gemini CLI) alongside
+the existing API-key-based `AIProvider` system (Sprint 15.5) — an
+**additive execution backend**, not a replacement. No existing Agent
+Orchestration (Sprint 11), Workflow Engine (Sprint 12), or Provider
+Management (Sprint 15.5) code was duplicated; each was extended at its
+existing seams.
+
+## Authentication: detect, never request or store
+
+Sprint 16's hard rule: NEMI never asks for an API key for these three
+tools and never stores a credential of its own for them. `app/ai/
+cli_tools.py` detects each tool the same two-axis way `ollama_provider.
+is_ollama_installed`/`is_server_running` already did for Ollama — a real
+`shutil.which()` PATH lookup for **installed**, plus a best-effort
+check for **authenticated**: does the tool's own officially-documented
+per-user credential file exist (e.g. `~/.claude/.credentials.json`)?
+That file's *existence* is checked — never its *contents*, which NEMI
+has no legitimate reason to read, store, or transmit. `installed` is
+confirmed by a real PATH lookup; `authenticated` is `True`/`False`/`None`
+(unknown), and `is_available()` only ever returns true for a positively
+confirmed `True` — an unknown state is never treated as a green light
+("do not fabricate availability"). A cheap, non-billing `--version`
+invocation (never a network call) confirms the binary actually runs.
+
+## Task Router: a pure decision function
+
+`app/ai/orchestration/task_router.py`'s `resolve_execution()` is a pure,
+side-effect-free function (no I/O) that decides, for a given role and
+the current `execution_policy`, whether to dispatch to a CLI tool or an
+API provider:
+
+- **Explicit mode** (user picked a specific tool, e.g. "Code with
+  Claude"): uses exactly that tool if available, otherwise reports it
+  unavailable — never silently redirects elsewhere.
+- **Auto mode**: tries this role's CLI tools in a fixed priority order
+  (`ROLE_TOOL_PRIORITY` — Codex first for planner/reviewer, Claude first
+  for developer, Gemini first for tester, matching the sprint's stated
+  role assignments) before falling back to the configured API provider
+  when `subscription_first` is on (the default) — the fallback is
+  always flagged (`fallback_used=True`) so callers can display it, never
+  silent. With `subscription_first` off, the order reverses.
+- Nothing available at all → `available=False`, an honest failure, never
+  a fabricated choice.
+
+Being pure and side-effect-free is what makes it exhaustively unit
+tested (`backend/tests/test_task_router.py`) without a real CLI, a
+database, or a network call.
+
+## Where CLI execution plugs into the existing pipeline
+
+`agent_tasks.provider` was already free-text (Sprint 15.5's per-role
+`agent_provider_defaults` already let any string through) — the three
+CLI tool ids (`codex-cli`, `claude-code-cli`, `gemini-cli`) are valid
+values there with zero schema change to that column. Two new nullable
+columns, `execution_backend` (`'api'`|`'cli'`, defaulted `'api'` so
+every pre-Sprint-16 row is unaffected) and `cli_tool_id`, plus
+`files_changed`/`cli_exit_code` for what a CLI agent actually did,
+distinguish the two paths.
+
+`app/ai/orchestration/manager.py`'s `_execute()` (the existing
+API-provider path) was split into `build_task_prompt()` (all of Sprint
+11-15's memory/knowledge-graph/review-risk grounding, unchanged) and
+`finalize_task_result()` (persisting the result, conflict detection,
+decomposition), with `_execute()` gluing them around `provider.
+stream_chat()`. Sprint 16 adds `claim_cli_dispatch()` and
+`record_cli_result()`, which call the exact same two functions —
+identical grounding, identical post-processing, only "how the response
+is obtained" differs. `run_cycle()` (the existing poller, driven by
+Electron's `agentCycleTimer`) now filters to `execution_backend='api'`
+only; a new endpoint, `GET /agents/tasks/cli-runnable`, is the CLI
+counterpart, polled by a new, separate Electron-main timer
+(`runCliDispatchCycleOnce`) — mirroring, not replacing, the existing
+poll-based architecture.
+
+**Why Electron, not the backend, spawns the CLI process**: Sprint 5's
+Filesystem Ownership rule already puts the open project's real
+filesystem path and all process/OS concerns in Electron main (see
+`build-runner.ts`'s existing build/test process spawning, which
+`frontend/electron/cli-tools.ts` mirrors exactly — spawn, stream
+stdout/stderr, track for cancellation). The backend only decides *that*
+a task is CLI-routed and composes its prompt; Electron does the actual
+`child_process.spawn`, then reports the outcome back via
+`record-cli-result` — the same "Electron does the OS work, the backend
+only records the outcome" pattern `mark-files-applied`/`workflows/{id}/
+test-result` already established.
+
+## Safety: git checkpoint, not human-gated Apply/Reject
+
+A CLI coding agent (Claude Code, Codex, Gemini CLI) has direct
+filesystem write access — unlike an API-routed Developer task, which
+only ever proposes fenced ` ```file:path ` blocks for human Apply/Reject
+(Sprint 11's locked decision, unchanged for the API path). Sprint 16's
+safety net for the CLI path is git, not a proposal queue:
+`prepareCliCheckpoint()` requires the project be a real git repository
+with at least one commit (refuses to dispatch otherwise — a clear,
+honest error, not a silent no-op), commits the user's own pending
+changes as an explicit checkpoint FIRST if the tree is dirty (never
+overwriting unreviewed work), then after the CLI tool exits,
+`commitCliChanges()` commits whatever it wrote as a second, separate
+commit and diffs the two to get the real `files_changed` list — every
+step a real, inspectable git commit.
+
+**Concurrency**: "never allow two coding agents to modify the same
+files simultaneously" is enforced as a hard, project-wide single-flight
+lock in `cli-tools.ts` (`activeDispatch`) — only one CLI agent process
+ever runs at a time across the whole app, rather than attempting to
+prove file-level isolation between two live runs.
+
+## Settings & Task Router UI — extended, not duplicated
+
+Settings gained one tab, "AI Coding Control" (`AiCodingControlTab.tsx`,
+alongside the existing "AI Providers" tab, same visual pattern as
+`AiProvidersTab`/`OllamaManagementPanel`): live tool status cards, the
+`execution_policy` mode/subscription-first controls, and per-role
+preferred-agent dropdowns that write directly into the existing
+`agent_provider_defaults` table (Sprint 15.5) — a CLI tool id is just
+another value in the same column a provider id already occupied. No new
+per-role-preference table was created.
+
+The Live Intelligence Dashboard gained one new tab, "AI Coding Control"
+(`AiCodingControlSection.tsx`) — per-tool status cards (Provider /
+Authentication / Role / Last Run / Availability) and the four requested
+buttons (`Plan with ChatGPT` / `Code with Claude` / `Code with Gemini` /
+`Auto Mode`), which set the Task Router's policy and per-role
+preference for the *next* pipeline rather than dispatching a task
+themselves — task creation stays the existing Agents Dashboard Goals
+tab, not duplicated. The existing Sprint Center tab gained the two
+genuinely-missing fields identified by an audit before writing any UI
+(`Execution Mode`, and `Running Tests` sourced from the existing
+`useIntelligence().runners.test.state` — no new polling loop) and had
+its `Current Agent` field extended to show the CLI tool's name when
+applicable; every other requested dashboard field (overall %, phase,
+current task, remaining tasks, ETA, files changed, commits, build
+status, CPU/RAM, token usage, cost, logs) already existed and was left
+untouched.
+
+## Explicitly out of scope
+
+Automated (pytest) coverage for the git-checkpoint/single-flight/
+cancellation logic in `cli-tools.ts` — this project has no existing
+frontend unit-test harness for `frontend/electron/*.ts` (its established
+testing method for that layer is live, Playwright-driven verification,
+per every prior sprint), so introducing one exclusively for this sprint
+would be new testing infrastructure, not reuse of existing infrastructure.
+That logic is instead verified live (where the required CLI is actually
+installed) and by code review — see `docs/SPRINT_16_REPORT.md` for
+exactly what was verified which way. A goal's initial (Sprint 12)
+one-off decomposition task always uses the workflow's own directly-
+configured API provider, never a CLI tool, even if the Planner role has
+a CLI override configured — only subsequent per-milestone role tasks
+(`create_milestone_pipelines`) route through the Task Router; the Goals
+tab UI has no path to set a CLI tool as a workflow's own top-level
+provider today, so this is not a functional gap in practice.
+
+---
+
 # PLUGIN / EXTENSION ARCHITECTURE (future — not started)
 
 MASTER_SPECIFICATION.md lists "Plugin Marketplace" under FUTURE
@@ -2263,6 +2422,35 @@ must never run with Node.js integration in the renderer.
     version in dev mode, since there is no public `app.setVersion()` to
     correct it. `package.json` is read directly instead
     (`resolveAppVersion()`), packaged-vs-dev-aware.
+78. **(Sprint 16)** NEMI never requests or stores an API key or any
+    credential for the three subscription coding CLIs — authentication
+    is detected (installed via `shutil.which`, authenticated via a
+    credential-file-existence heuristic), never bypassed, scraped, or
+    fabricated. `is_available()` treats unknown auth state as
+    unavailable, never as a green light.
+79. **(Sprint 16)** `resolve_execution()` (the Task Router) is a pure,
+    side-effect-free function — the entire Auto-mode/subscription-first
+    decision lives in one exhaustively unit-tested place, with no I/O.
+80. **(Sprint 16)** CLI-tool execution is a sibling to `AIProvider`, not
+    a change to it — `agent_tasks.execution_backend`/`cli_tool_id` route
+    a task to Electron's CLI dispatcher instead of `get_provider()`, but
+    every existing API-provider code path is otherwise unmodified.
+81. **(Sprint 16)** A CLI coding agent's direct filesystem writes are
+    safeguarded by a git checkpoint-commit-diff sequence, not human-gated
+    Apply/Reject (which stays exclusive to API-routed Developer tasks,
+    unchanged) — dispatch is refused outright for a non-git project.
+82. **(Sprint 16)** CLI dispatch is a hard, project-wide single-flight
+    lock (one CLI coding agent process at a time, app-wide) rather than
+    an attempt to prove file-level isolation between concurrent runs.
+83. **(Sprint 16)** Electron spawns the CLI process and owns the git
+    safety checkpoint (Sprint 5's Filesystem Ownership rule); the backend
+    only decides routing and composes the prompt, then records the
+    outcome Electron reports back — mirroring the existing
+    mark-files-applied/test-result pattern, not a new one.
+84. **(Sprint 16)** The four Task Router UI buttons (Plan with ChatGPT /
+    Code with Claude / Code with Gemini / Auto Mode) set routing policy
+    for the next pipeline; they never dispatch a task themselves — task
+    creation stays the existing Agents Dashboard Goals tab.
 
 ---
 

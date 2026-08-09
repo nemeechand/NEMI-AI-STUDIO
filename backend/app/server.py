@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from app import __version__
 from app.api.agents import router as agents_router
 from app.api.ai import router as ai_router
+from app.api.cli_tools import router as cli_tools_router
 from app.api.health import router as health_router
 from app.api.knowledge import router as knowledge_router
 from app.api.logs import router as logs_router
@@ -104,6 +105,7 @@ def create_app() -> FastAPI:
     app.include_router(stats_router)
     app.include_router(knowledge_router)
     app.include_router(providers_router)
+    app.include_router(cli_tools_router)
     register_exception_handlers(app)
     return app
 

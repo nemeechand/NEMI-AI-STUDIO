@@ -59,10 +59,21 @@ export interface AgentTask {
   conflict_warning: string | null;
   live_output: string | null;
   rolled_back_at: string | null;
+  // Sprint 16: Task Router fields.
+  execution_backend: 'api' | 'cli';
+  cli_tool_id: string | null;
+  files_changed: string[] | null;
+  cli_exit_code: number | null;
   created_at: string;
   updated_at: string;
   started_at: string | null;
   completed_at: string | null;
+}
+
+export interface ClaimCliDispatch {
+  task: AgentTask;
+  cli_tool_id: string;
+  prompt: string;
 }
 
 export interface FileSnapshotInput {
@@ -101,6 +112,7 @@ export function createAgentPipeline(input: {
   model: string;
   priority?: number;
   stages?: AgentRoleKey[];
+  useTaskRouter?: boolean;
 }): Promise<AgentTask[]> {
   return requestJson('/agents/tasks', {
     method: 'POST',
@@ -113,6 +125,7 @@ export function createAgentPipeline(input: {
       model: input.model,
       priority: input.priority ?? 2,
       stages: input.stages,
+      use_task_router: input.useTaskRouter ?? false,
     }),
   });
 }
@@ -157,5 +170,41 @@ export function runAgentCycle(apiKeys: Record<string, string>): Promise<{ starte
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ api_keys: apiKeys }),
+  });
+}
+
+// Sprint 16: Task Router's CLI dispatch path — see backend
+// app/ai/orchestration/manager.py's claim_cli_dispatch/record_cli_result.
+
+export function listCliRunnableTasks(): Promise<AgentTask[]> {
+  return requestJson('/agents/tasks/cli-runnable');
+}
+
+export function claimCliDispatch(taskId: string): Promise<ClaimCliDispatch> {
+  return requestJson(`/agents/tasks/${encodeURIComponent(taskId)}/claim-cli-dispatch`, {
+    method: 'POST',
+  });
+}
+
+export function recordCliResult(
+  taskId: string,
+  result: {
+    success: boolean;
+    exitCode: number | null;
+    output: string;
+    filesChanged: string[];
+    errorMessage: string | null;
+  },
+): Promise<AgentTask> {
+  return requestJson(`/agents/tasks/${encodeURIComponent(taskId)}/record-cli-result`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      success: result.success,
+      exit_code: result.exitCode,
+      output: result.output,
+      files_changed: result.filesChanged,
+      error_message: result.errorMessage,
+    }),
   });
 }

@@ -31,6 +31,13 @@ export function AiProvider({ children }: { children: ReactNode }) {
   const [providerSettingsMap, setProviderSettingsMap] = useState<Record<string, ProviderSettings>>(
     {},
   );
+  // Alpha 2: each cloud provider's REAL, live model catalog (once fetched —
+  // see the effect below), keyed by provider id. `SUGGESTED_MODELS` is only
+  // ever a curated starting point/datalist (its own doc comment says so);
+  // this is the actual source of truth used to catch a stale selected
+  // model, the same real discovery ModelsTab's "Refresh Models" button
+  // already offered manually — now also applied automatically to Chat.
+  const [realModelsMap, setRealModelsMap] = useState<Record<string, string[]>>({});
 
   const [selectedProvider, setSelectedProviderState] = useState<string>(readStoredProvider);
   const [selectedModel, setSelectedModelState] = useState<string>(() =>
@@ -120,11 +127,64 @@ export function AiProvider({ children }: { children: ReactNode }) {
   // (422), but nothing in the UI prompted the user to pick one first — the
   // send just silently failed. Auto-selecting the first locally-available
   // model once the real list loads closes that gap without a fabricated
-  // default.
+  // default. Alpha 2: also corrects a *non-empty* but stale selection —
+  // e.g. a model that was pulled, selected, then later deleted — the same
+  // "stale/invalid model must not silently remain selected" rule applied
+  // to the cloud-provider effect below.
   useEffect(() => {
-    if (selectedProvider !== 'ollama' || selectedModel !== '' || ollamaModels.length === 0) return;
+    if (selectedProvider !== 'ollama' || ollamaModels.length === 0) return;
+    if (selectedModel && ollamaModels.includes(selectedModel)) return;
     setSelectedModel(ollamaModels[0]);
   }, [selectedProvider, selectedModel, ollamaModels, setSelectedModel]);
+
+  // Alpha 2: fetches the current cloud provider's REAL, live model catalog
+  // (the exact same `list_models()` call ModelsTab's "Refresh Models"
+  // button already triggers manually) once it's configured — cached per
+  // provider for the session, not re-fetched on every render/switch back.
+  useEffect(() => {
+    if (selectedProvider === 'ollama') return;
+    if (!configuredProviders.has(selectedProvider)) return;
+    if (realModelsMap[selectedProvider]) return;
+    let cancelled = false;
+    const baseUrl = providerSettingsMap[selectedProvider]?.base_url ?? null;
+    void window.nemi.providers
+      .refreshModels(selectedProvider, baseUrl)
+      .then((models) => {
+        if (cancelled || models.length === 0) return;
+        setRealModelsMap((prev) => ({ ...prev, [selectedProvider]: models }));
+      })
+      .catch(() => {
+        // Offline, rate-limited, or the key was revoked mid-session — the
+        // real catalog simply stays unknown; the static curated default
+        // below remains the honest fallback, not an error state.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedProvider, configuredProviders, providerSettingsMap, realModelsMap]);
+
+  // Alpha 2 bug fix: `selectedModel` was seeded once from `localStorage`
+  // and never revisited, so a model that was valid when first picked but
+  // has since been retired by the provider (found live: Gemini's
+  // `gemini-2.5-flash` returning a real 404 "no longer available to new
+  // users") stayed silently selected forever — editing `providerDefaults
+  // .ts`'s curated suggestions had no effect on it. Once the provider's
+  // REAL catalog is known (the effect above), a selection that isn't
+  // actually in it is corrected — preferring the Settings-configured
+  // `default_model` if that itself is still real, else the catalog's
+  // first entry — never based on the static curated list alone, which is
+  // deliberately just a starting-point suggestion, not an authority.
+  useEffect(() => {
+    const realModels = realModelsMap[selectedProvider];
+    if (!realModels || realModels.length === 0) return;
+    if (selectedModel && realModels.includes(selectedModel)) return;
+    const configuredDefault = providerSettingsMap[selectedProvider]?.default_model;
+    const corrected =
+      configuredDefault && realModels.includes(configuredDefault)
+        ? configuredDefault
+        : realModels[0];
+    setSelectedModel(corrected);
+  }, [realModelsMap, selectedProvider, selectedModel, providerSettingsMap, setSelectedModel]);
 
   // --- Conversations scoped to the active project (Sprint 10: context-aware
   // chat using the active workspace). Switching projects resets the view,

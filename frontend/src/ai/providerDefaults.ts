@@ -11,7 +11,7 @@ export const SUGGESTED_MODELS: Record<string, string[]> = {
     'claude-opus-4-1-20250805',
     'claude-3-5-haiku-20241022',
   ],
-  gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+  gemini: ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-2.5-pro', 'gemini-2.5-flash'],
   ollama: [],
   // Sprint 15.5: DeepSeek/Grok publish a fixed model catalog like the other
   // cloud providers (unlike Ollama's genuinely live local list), so a small

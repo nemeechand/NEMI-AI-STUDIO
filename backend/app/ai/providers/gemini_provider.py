@@ -121,7 +121,20 @@ class GeminiProvider(AIProvider):
             return []
         client = _client(api_key, base_url)
         try:
-            return sorted([m.name async for m in await client.aio.models.list() if m.name])
+            # The Gemini API's `models.list()` returns each model's full
+            # resource name (e.g. "models/gemini-2.5-flash"), not the bare
+            # id `stream_chat`'s `model=` parameter and every other part of
+            # this app (SUGGESTED_MODELS, pricing.ts, favorites, the Chat
+            # model field) actually use — stripped here so this real, live
+            # catalog is directly comparable/usable everywhere else instead
+            # of silently never matching anything.
+            return sorted(
+                {
+                    m.name.removeprefix("models/")
+                    async for m in await client.aio.models.list()
+                    if m.name
+                }
+            )
         except Exception:
             return []
         finally:
